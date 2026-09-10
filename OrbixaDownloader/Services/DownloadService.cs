@@ -1,207 +1,160 @@
-﻿using OrbixaDownloader.Models;
+using OrbixaDownloader.Models;
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace OrbixaDownloader.Services
+namespace OrbixaDownloader.Services;
+
+public class DownloadService
 {
-    public class DownloadService
+    private readonly AppSettings _settings;
+    private readonly SemaphoreSlim _semaphore;
+    private static readonly Regex ProgressRegex = new(@"\[download\]\s+(\d+\.?\d*)%", RegexOptions.Compiled);
+    internal const string OutputMarker = "ORBIXA_FILE:";
+    public DownloadService(AppSettings settings)
     {
-        private readonly AppSettings _settings;
-        private readonly SemaphoreSlim _semaphore;
+        _settings = settings;
+        _semaphore = new SemaphoreSlim(Math.Clamp(settings.MaxConcurrentDownloads, 1, 4));
+    }
 
-        // Regex para parsear el output de yt-dlp
-        // Ejemplo: [download]  45.2% of  3.54MiB at  1.23MiB/s ETA 00:02
-        private static readonly Regex ProgressRegex =
-            new(@"\[download\]\s+(\d+\.?\d*)%", RegexOptions.Compiled);
+    public static bool IsSupportedUrl(string value) => Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) && !string.IsNullOrWhiteSpace(uri.Host);
 
-        private static readonly Regex TitleRegex =
-            new(@"\[(?:youtube|info)\].*?:\s+(.+)", RegexOptions.Compiled);
+    public void ValidatePreflight(DownloadOptions options)
+    {
+        var missing = new[] { _settings.YtDlpPath, _settings.FfmpegPath, _settings.FfprobePath, _settings.DenoPath }
+            .Where(path => !File.Exists(path) || new FileInfo(path).Length == 0).Select(Path.GetFileName).ToArray();
+        if (missing.Length > 0) throw new InvalidOperationException("Faltan herramientas: " + string.Join(", ", missing) + ". Abrí Ajustes → Actualizar ahora y volvé a intentar.");
+        ValidateOutputFolder(options.OutputFolder);
+    }
 
-        public DownloadService(AppSettings settings)
+    public static void ValidateOutputFolder(string folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder)) throw new InvalidOperationException("Elegí una carpeta de destino en Ajustes.");
+        try
         {
-            _settings = settings;
-            _semaphore = new SemaphoreSlim(settings.MaxConcurrentDownloads);
+            Directory.CreateDirectory(folder);
+            string probe = Path.Combine(folder, ".orbixa-write-" + Guid.NewGuid().ToString("N"));
+            using var stream = new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
+            stream.WriteByte(0);
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        { throw new InvalidOperationException("No se puede escribir en la carpeta de destino. Elegí otra carpeta en Ajustes.", ex); }
+    }
 
-        public async Task DownloadAsync(DownloadItem item, DownloadOptions options)
+    internal ProcessStartInfo CreateStartInfo(string url, DownloadOptions options)
+    {
+        var psi = new ProcessStartInfo(_settings.YtDlpPath)
         {
-            await _semaphore.WaitAsync(item.CancellationSource!.Token);
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+            CreateNoWindow = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+        };
+        foreach (string arg in options.GetArguments(url).SkipLast(2)) psi.ArgumentList.Add(arg);
+        AddRuntimeArguments(psi, _settings);
+        psi.ArgumentList.Add("--print");
+        psi.ArgumentList.Add("after_move:" + OutputMarker + "%(filepath)j");
+        psi.ArgumentList.Add("--no-simulate");
+        psi.ArgumentList.Add("--"); psi.ArgumentList.Add(url);
+        return psi;
+    }
 
-            try
+    internal static void AddRuntimeArguments(ProcessStartInfo psi, AppSettings settings)
+    {
+        psi.ArgumentList.Add("--ignore-config");
+        psi.ArgumentList.Add("--encoding"); psi.ArgumentList.Add("utf-8");
+        psi.ArgumentList.Add("--ffmpeg-location"); psi.ArgumentList.Add(Path.GetDirectoryName(settings.FfmpegPath)!);
+        psi.ArgumentList.Add("--js-runtimes"); psi.ArgumentList.Add("deno:" + settings.DenoPath);
+    }
+
+    public async Task DownloadAsync(DownloadItem item, DownloadOptions options)
+    {
+        bool acquired = false;
+        var ct = (item.CancellationSource ??= new CancellationTokenSource()).Token;
+        try
+        {
+            await _semaphore.WaitAsync(ct);
+            acquired = true;
+            ct.ThrowIfCancellationRequested();
+            ValidatePreflight(options);
+            item.ErrorDetails = "";
+            item.OutputPath = "";
+            item.Status = DownloadStatus.FetchingInfo;
+            item.Progress = 0;
+            using var process = new Process { StartInfo = CreateStartInfo(item.Url, options) };
+            var errors = new StringBuilder();
+            string outputPath = "";
+            process.Start();
+            item.Status = DownloadStatus.Downloading;
+            async Task ReadOutputAsync()
             {
-                item.Status = DownloadStatus.FetchingInfo;
-                item.Progress = 0;
-
-                string args = options.Type == DownloadType.AudioOnly
-                    ? options.GetYtDlpAudioArgs(item.Url, options.OutputFolder)
-                    : options.GetYtDlpVideoArgs(item.Url, options.OutputFolder);
-
-                var psi = new ProcessStartInfo
+                while (await process.StandardOutput.ReadLineAsync() is string line)
                 {
-                    FileName = _settings.YtDlpPath,
-                    Arguments = args,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    StandardOutputEncoding = System.Text.Encoding.UTF8
-                };
-
-                // Inyectar ffmpeg si existe
-                if (File.Exists(_settings.FfmpegPath))
-                {
-                    string ffmpegDir = Path.GetDirectoryName(_settings.FfmpegPath)!;
-                    psi.Arguments += $" --ffmpeg-location \"{ffmpegDir}\"";
-                }
-
-                using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-
-                var outputLines = new List<string>();
-
-                process.OutputDataReceived += (_, e) =>
-                {
-                    if (e.Data == null) return;
-                    ParseOutputLine(e.Data, item);
-                    outputLines.Add(e.Data);
-                };
-
-                process.ErrorDataReceived += (_, e) =>
-                {
-                    if (e.Data != null) outputLines.Add($"ERR: {e.Data}");
-                };
-
-                item.Status = DownloadStatus.Downloading;
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-
-                // Esperar con soporte de cancelación
-                var ct = item.CancellationSource.Token;
-                await Task.Run(() =>
-                {
-                    while (!process.HasExited)
+                    if (line.StartsWith(OutputMarker, StringComparison.Ordinal))
                     {
-                        if (ct.IsCancellationRequested)
-                        {
-                            try { process.Kill(); } catch { }
-                            break;
-                        }
-                        Thread.Sleep(100);
+                        try { outputPath = JsonSerializer.Deserialize<string>(line[OutputMarker.Length..]) ?? ""; }
+                        catch (JsonException) { }
                     }
-                }, ct);
-
-                if (ct.IsCancellationRequested)
-                {
-                    item.Status = DownloadStatus.Cancelled;
-                    return;
-                }
-
-                if (process.ExitCode == 0)
-                {
-                    item.Progress = 100;
-                    item.Status = DownloadStatus.Completed;
-                    item.OutputPath = ResolveOutputPath(item.Title, options);
-                }
-                else
-                {
-                    item.Status = DownloadStatus.Failed;
-                    item.StatusText = $"Error (código {process.ExitCode})";
+                    else ParseOutputLine(line, item);
                 }
             }
+            async Task ReadErrorsAsync()
+            {
+                while (await process.StandardError.ReadLineAsync() is string line)
+                {
+                    // One writer; retained in memory only, never persisted or sent elsewhere.
+                    errors.AppendLine(line);
+                }
+            }
+            Task stdout = ReadOutputAsync(), stderr = ReadErrorsAsync();
+            try { await process.WaitForExitAsync(ct); }
             catch (OperationCanceledException)
             {
-                item.Status = DownloadStatus.Cancelled;
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                await process.WaitForExitAsync();
+                throw;
             }
-            catch (Exception ex)
+            finally { await Task.WhenAll(stdout, stderr); }
+            ct.ThrowIfCancellationRequested();
+            if (process.ExitCode != 0)
             {
-                item.Status = DownloadStatus.Failed;
-                item.StatusText = $"Error: {ex.Message}";
+                string cause = errors.Length > 0 ? errors.ToString().Trim() : "yt-dlp no informó detalles del error. Verificá el enlace y actualizá las herramientas en Ajustes.";
+                Fail(item, $"Error de descarga (código {process.ExitCode}).\r\n\r\n{cause}");
             }
-            finally
+            else if (string.IsNullOrWhiteSpace(outputPath) || !File.Exists(outputPath))
+                Fail(item, "yt-dlp finalizó, pero no se pudo verificar el archivo de salida. Revisá la carpeta de destino y volvé a intentar.");
+            else
             {
-                _semaphore.Release();
+                item.OutputPath = Path.GetFullPath(outputPath);
+                item.Title = Path.GetFileNameWithoutExtension(outputPath);
+                item.Progress = 100;
+                item.Status = DownloadStatus.Completed;
             }
         }
+        catch (OperationCanceledException) { item.Status = DownloadStatus.Cancelled; }
+        catch (Exception ex) { Fail(item, ex.Message); }
+        finally { if (acquired) _semaphore.Release(); }
+    }
 
-        private void ParseOutputLine(string line, DownloadItem item)
+    private static void Fail(DownloadItem item, string details)
+    {
+        item.ErrorDetails = details;
+        item.Status = DownloadStatus.Failed;
+    }
+
+    private static void ParseOutputLine(string line, DownloadItem item)
+    {
+        var progress = ProgressRegex.Match(line);
+        if (progress.Success && double.TryParse(progress.Groups[1].Value, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out double pct))
         {
-            // Progreso porcentual
-            var progressMatch = ProgressRegex.Match(line);
-            if (progressMatch.Success)
-            {
-                if (double.TryParse(progressMatch.Groups[1].Value,
-                    System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out double pct))
-                {
-                    item.Progress = pct;
-                    item.Status = DownloadStatus.Downloading;
-                    item.StatusText = $"Descargando {pct:F0}%";
-                }
-                return;
-            }
-
-            // Detectar conversión
-            if (line.Contains("[ExtractAudio]") || line.Contains("[Merger]") ||
-                line.Contains("Deleting original"))
-            {
-                item.Status = DownloadStatus.Converting;
-                return;
-            }
-
-            // Extraer título desde el output de yt-dlp
-            if (line.StartsWith("[youtube]") && line.Contains(": ") && item.Title == "Obteniendo información...")
-            {
-                var parts = line.Split(": ", 2);
-                if (parts.Length > 1 && !parts[1].StartsWith("Downloading"))
-                    item.Title = parts[1].Trim();
-            }
-
-            // Título desde la descarga
-            if (line.Contains("Destination:"))
-            {
-                string filename = Path.GetFileNameWithoutExtension(
-                    line.Split("Destination:").Last().Trim());
-                if (!string.IsNullOrWhiteSpace(filename))
-                    item.Title = filename;
-            }
+            item.Progress = pct;
+            item.Status = DownloadStatus.Downloading;
         }
-
-        private string ResolveOutputPath(string title, DownloadOptions options)
-        {
-            string ext = options.Type == DownloadType.AudioOnly
-                ? options.AudioFormat.ToString().ToLower()
-                : "mp4";
-
-            // Sanitizar nombre de archivo
-            string safe = string.Concat(title.Select(c =>
-                Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-
-            return Path.Combine(options.OutputFolder, $"{safe}.{ext}");
-        }
-
-        public async Task<string> GetVideoTitleAsync(string url)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = _settings.YtDlpPath,
-                    Arguments = $"--get-title --no-playlist \"{url}\"",
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                using var p = Process.Start(psi)!;
-                string title = await p.StandardOutput.ReadToEndAsync();
-                await p.WaitForExitAsync();
-                return title.Trim();
-            }
-            catch
-            {
-                return "";
-            }
-        }
+        else if (line.Contains("[ExtractAudio]") || line.Contains("[Merger]") || line.Contains("[VideoConvertor]"))
+            item.Status = DownloadStatus.Converting;
+        else if (line.Contains("Destination:"))
+            item.Title = Path.GetFileNameWithoutExtension(line.Split("Destination:").Last().Trim());
     }
 }
+

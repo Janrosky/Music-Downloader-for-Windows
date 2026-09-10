@@ -1,4 +1,4 @@
-﻿namespace OrbixaDownloader.Models
+namespace OrbixaDownloader.Models
 {
     public enum AudioFormat
     {
@@ -40,45 +40,31 @@
         public bool EmbedThumbnail { get; set; } = true;
         public bool EmbedMetadata { get; set; } = true;
 
-        public string GetYtDlpAudioArgs(string url, string outputFolder)
+        public DownloadOptions Snapshot() => (DownloadOptions)MemberwiseClone();
+
+        public IEnumerable<string> GetArguments(string url)
         {
-            string ext = AudioFormat.ToString().ToLower();
-            string quality = ((int)Quality).ToString();
-            string output = Path.Combine(outputFolder, "%(title)s.%(ext)s");
-
-            var args = new List<string>
+            var args = new List<string> { "--no-playlist", "--progress", "--newline", "-o", Path.Combine(OutputFolder, "%(title)s.%(ext)s") };
+            if (Type == DownloadType.AudioOnly)
             {
-                $"\"{url}\"",
-                "-x",
-                $"--audio-format {ext}",
-                $"--audio-quality {quality}",
-                $"-o \"{output}\"",
-                "--no-playlist",
-                "--progress",
-                "--newline"
-            };
-
-            if (EmbedThumbnail) args.Add("--embed-thumbnail");
+                args.AddRange(new[] { "-x", "--audio-format", AudioFormat.ToString().ToLowerInvariant(), "--audio-quality", ((int)Quality).ToString() });
+                if (EmbedThumbnail && AudioFormat is AudioFormat.MP3 or AudioFormat.M4A or AudioFormat.FLAC or AudioFormat.OGG)
+                    args.Add("--embed-thumbnail");
+            }
+            else
+            {
+                string format = VideoFormat.ToString().ToLowerInvariant();
+                string selection = VideoFormat switch
+                {
+                    VideoFormat.MP4 => "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                    VideoFormat.WEBM => "bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]/best",
+                    _ => "bestvideo+bestaudio/best"
+                };
+                args.AddRange(new[] { "-f", selection, "--merge-output-format", format, "--recode-video", format });
+            }
             if (EmbedMetadata) args.Add("--embed-metadata");
-
-            return string.Join(" ", args);
-        }
-
-        public string GetYtDlpVideoArgs(string url, string outputFolder)
-        {
-            string output = Path.Combine(outputFolder, "%(title)s.%(ext)s");
-
-            return string.Join(" ", new[]
-            {
-                $"\"{url}\"",
-                "-f \"bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best\"",
-                "--merge-output-format mp4",
-                $"-o \"{output}\"",
-                "--no-playlist",
-                "--progress",
-                "--newline",
-                EmbedMetadata ? "--embed-metadata" : ""
-            });
+            args.Add("--"); args.Add(url);
+            return args;
         }
     }
 }

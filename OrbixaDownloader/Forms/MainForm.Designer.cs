@@ -20,7 +20,7 @@
             this.MinimumSize = new Size(820, 560);
             this.FormBorderStyle = FormBorderStyle.None;
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Color.FromArgb(5, 8, 22);
+            this.BackColor = OrbixaDownloader.Forms.DrawHelper.Canvas;
             this.DoubleBuffered = true;
             this.Name = "MainForm";
             this.Text = "Orbixa Downloader";

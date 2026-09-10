@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0-windows</TargetFramework><UseWindowsForms>true</UseWindowsForms><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <Reference Include="OrbixaDownloader"><HintPath>../../OrbixaDownloader/bin/Debug/net8.0-windows/OrbixaDownloader.dll</HintPath></Reference>
+    <Reference Include="Newtonsoft.Json"><HintPath>../../OrbixaDownloader/bin/Debug/net8.0-windows/Newtonsoft.Json.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>
