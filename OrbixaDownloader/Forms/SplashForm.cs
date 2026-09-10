@@ -1,4 +1,4 @@
-﻿using OrbixaDownloader.Services;
+using OrbixaDownloader.Services;
 using OrbixaDownloader.Models;
 
 namespace OrbixaDownloader.Forms
@@ -11,12 +11,12 @@ namespace OrbixaDownloader.Forms
         private const int W = 520;
         private const int H = 320;
 
-        private static readonly Color BgDeep = Color.FromArgb(5, 8, 22);
-        private static readonly Color Red = Color.FromArgb(219, 41, 85);
-        private static readonly Color RedLight = Color.FromArgb(230, 64, 108);
-        private static readonly Color White = Color.FromArgb(244, 244, 245);
-        private static readonly Color Muted = Color.FromArgb(161, 161, 170);
-        private static readonly Color Surface = Color.FromArgb(31, 41, 55);
+        private static readonly Color BgDeep = DrawHelper.Canvas;
+        private static readonly Color Red = DrawHelper.Accent;
+        private static readonly Color RedLight = DrawHelper.PrimaryDark;
+        private static readonly Color White = DrawHelper.Text;
+        private static readonly Color Muted = DrawHelper.Muted;
+        private static readonly Color Surface = DrawHelper.SurfaceSolid;
 
         private int _progress = 0;
         private string _statusMsg = "Iniciando...";
@@ -36,15 +36,18 @@ namespace OrbixaDownloader.Forms
         {
             base.OnShown(e);
 
-            _pulseTimer = new System.Windows.Forms.Timer { Interval = 30 };
-            _pulseTimer.Tick += (_, _) =>
+            if (!SystemInformation.HighContrast)
             {
-                _pulseAlpha += _pulseUp ? 0.04f : -0.04f;
-                if (_pulseAlpha >= 1f) { _pulseAlpha = 1f; _pulseUp = false; }
-                if (_pulseAlpha <= 0f) { _pulseAlpha = 0f; _pulseUp = true; }
-                Invalidate();
-            };
-            _pulseTimer.Start();
+                _pulseTimer = new System.Windows.Forms.Timer { Interval = 30 };
+                _pulseTimer.Tick += (_, _) =>
+                {
+                    _pulseAlpha += _pulseUp ? 0.04f : -0.04f;
+                    if (_pulseAlpha >= 1f) { _pulseAlpha = 1f; _pulseUp = false; }
+                    if (_pulseAlpha <= 0f) { _pulseAlpha = 0f; _pulseUp = true; }
+                    Invalidate();
+                };
+                _pulseTimer.Start();
+            }
 
             Task.Run(RunStartupAsync);
         }
@@ -68,7 +71,7 @@ namespace OrbixaDownloader.Forms
             catch (Exception ex)
             {
                 Invoke(() => { _statusMsg = $"Advertencia: {ex.Message}"; Invalidate(); });
-                await Task.Delay(1500);
+                Invoke(() => ErrorDetailsDialog.ShowDetails(this, ex.Message));
             }
             finally
             {
@@ -107,12 +110,12 @@ namespace OrbixaDownloader.Forms
             using var bgBrush = new SolidBrush(BgDeep);
             g.FillRectangle(bgBrush, ClientRectangle);
 
-            DrawGlow(g, W / 2, -20, 280, Color.FromArgb(40, 219, 41, 85));
+            if (!SystemInformation.HighContrast) DrawGlow(g, W / 2, -20, 280, DrawHelper.PrimaryDark);
 
             var card = new Rectangle(40, 40, W - 80, H - 80);
             DrawRoundedRect(g, card, 18,
-                Color.FromArgb(180, 13, 18, 36),
-                Color.FromArgb(40, 219, 41, 85), 1f);
+                SystemInformation.HighContrast ? SystemColors.Control : DrawHelper.SurfaceSolid,
+                SystemInformation.HighContrast ? SystemColors.WindowText : DrawHelper.Border, 1f);
 
             int lx = W / 2, ly = 105;
             using var logoFont = GetFont(32, FontStyle.Bold);
@@ -133,7 +136,7 @@ namespace OrbixaDownloader.Forms
                 lx - subSize.Width / 2, ly + logoSize.Height / 2 + 4);
 
             int divY = ly + 60;
-            using var divPen = new Pen(Color.FromArgb(30, 255, 255, 255), 1f);
+            using var divPen = new Pen(SystemInformation.HighContrast ? SystemColors.WindowText : DrawHelper.Border, 1f);
             g.DrawLine(divPen, card.Left + 32, divY, card.Right - 32, divY);
 
             using var statFont = GetFont(10, FontStyle.Regular);
@@ -156,14 +159,14 @@ namespace OrbixaDownloader.Forms
             }
 
             using var pctFont = GetFont(9, FontStyle.Regular);
-            using var pctBrush = new SolidBrush(Color.FromArgb(100, White));
+            using var pctBrush = new SolidBrush(Muted);
             string pctText = $"{_progress}%";
             var pctSize = g.MeasureString(pctText, pctFont);
             g.DrawString(pctText, pctFont, pctBrush,
                 barX + barW - pctSize.Width, barY + barH + 6);
 
             using var verFont = GetFont(8, FontStyle.Regular);
-            using var verBrush = new SolidBrush(Color.FromArgb(60, White));
+            using var verBrush = new SolidBrush(Muted);
             string ver = "v1.0.0";
             var verSize = g.MeasureString(ver, verFont);
             g.DrawString(ver, verFont, verBrush,

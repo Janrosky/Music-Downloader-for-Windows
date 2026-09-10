@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 
 namespace OrbixaDownloader.Models
 {
@@ -23,6 +23,9 @@ namespace OrbixaDownloader.Models
         private string _statusText = "En cola";
         private string _thumbnailUrl = "";
         private string _outputPath = "";
+
+        public string ErrorDetails { get; set; } = "";
+        public DownloadOptions? Options { get; set; }
 
         public string Id { get; set; } = Guid.NewGuid().ToString();
         public string Url { get; set; } = "";

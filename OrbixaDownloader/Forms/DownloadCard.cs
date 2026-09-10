@@ -1,200 +1,113 @@
-﻿using OrbixaDownloader.Models;
+using OrbixaDownloader.Models;
+using System.ComponentModel;
 
-namespace OrbixaDownloader.Forms
+namespace OrbixaDownloader.Forms;
+
+public class DownloadCard : Panel
 {
-    /// <summary>
-    /// Card visual para cada item en la cola de descargas.
-    /// Se auto-refresca cuando el DownloadItem notifica cambios.
-    /// </summary>
-    public class DownloadCard : Panel
+    private readonly DownloadItem _item;
+    private readonly Label _title = new() { AutoEllipsis = true, Dock = DockStyle.Fill, ForeColor = DrawHelper.Text };
+    private readonly Label _status = new() { Dock = DockStyle.Fill, ForeColor = DrawHelper.Muted };
+    private readonly ProgressBar _progress = new() { Dock = DockStyle.Fill, Maximum = 100 };
+    private readonly Button _cancel = new() { AutoSize = true };
+    private readonly Button _retry = new() { AutoSize = true };
+    private readonly Button _details = new() { AutoSize = true };
+    private readonly Button _folder = new() { AutoSize = true };
+    private readonly System.Windows.Forms.Timer _timer;
+
+    public DownloadCard(DownloadItem item, Action<DownloadItem> onCancel, Action<DownloadItem> onOpenFolder, Action<DownloadItem>? onRetry = null)
     {
-        private readonly DownloadItem _item;
-        private readonly Action<DownloadItem> _onCancel;
-        private readonly Action<DownloadItem> _onOpenFolder;
-
-        private static readonly Color BgCard = Color.FromArgb(13, 18, 36);
-        private static readonly Color BgCard2 = Color.FromArgb(20, 27, 48);
-        private static readonly Color Red = Color.FromArgb(219, 41, 85);
-        private static readonly Color RedLight = Color.FromArgb(230, 64, 108);
-        private static readonly Color Green = Color.FromArgb(34, 197, 94);
-        private static readonly Color White = Color.FromArgb(244, 244, 245);
-        private static readonly Color Muted = Color.FromArgb(161, 161, 170);
-        private static readonly Color Surface = Color.FromArgb(31, 41, 55);
-
-        private System.Windows.Forms.Timer _refreshTimer;
-
-        public DownloadCard(DownloadItem item,
-            Action<DownloadItem> onCancel,
-            Action<DownloadItem> onOpenFolder)
+        _item = item;
+        Height = 124;
+        Margin = new Padding(0, 0, 0, 8);
+        Padding = new Padding(12, 8, 12, 8);
+        BackColor = MainForm.BgCard;
+        Font = MainForm.GetFont(9, FontStyle.Regular);
+        AccessibleName = UiText.Get("Descarga", "Download");
+        _cancel.Text = UiText.Get("[x] Cancelar", "[x] Cancel");
+        _retry.Text = UiText.Get("[>] Reintentar", "[>] Retry");
+        _details.Text = UiText.Get("[!] Ver error", "[!] View error");
+        _folder.Text = UiText.Get("[+] Abrir carpeta", "[+] Open folder");
+        _cancel.AccessibleName = UiText.Get("Cancelar descarga", "Cancel download");
+        _retry.AccessibleName = UiText.Get("Reintentar descarga", "Retry download");
+        _details.AccessibleName = UiText.Get("Ver detalles del error", "View error details");
+        _folder.AccessibleName = UiText.Get("Abrir carpeta de descarga", "Open download folder");
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 12));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.Controls.Add(_title, 0, 0); layout.Controls.Add(_status, 0, 1); layout.Controls.Add(_progress, 0, 2);
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        foreach (var button in new[] { _cancel, _retry, _details, _folder })
         {
-            _item = item;
-            _onCancel = onCancel;
-            _onOpenFolder = onOpenFolder;
-
-            Height = 76;
-            Margin = new Padding(0, 0, 0, 8);
-            BackColor = Color.Transparent;
-            DoubleBuffered = true;
-
-            // Subscribe to item changes
-            _item.PropertyChanged += (_, _) =>
-            {
-                if (InvokeRequired) Invoke(Invalidate);
-                else Invalidate();
-            };
-
-            // Fallback refresh timer (30fps)
-            _refreshTimer = new System.Windows.Forms.Timer { Interval = 100 };
-            _refreshTimer.Tick += (_, _) =>
-            {
-                if (_item.Status == DownloadStatus.Downloading ||
-                    _item.Status == DownloadStatus.Converting ||
-                    _item.Status == DownloadStatus.FetchingInfo)
-                    Invalidate();
-            };
-            _refreshTimer.Start();
-
-            // Click: open folder if completed
-            Click += (_, e) =>
-            {
-                if (_item.Status == DownloadStatus.Completed)
-                    _onOpenFolder(_item);
-            };
-            Cursor = Cursors.Hand;
+            button.BackColor = MainForm.Surface;
+            button.ForeColor = DrawHelper.Text;
+            button.FlatStyle = FlatStyle.Standard;
+            actions.Controls.Add(button);
         }
+        layout.Controls.Add(actions, 0, 3); Controls.Add(layout);
+        _cancel.Click += (_, _) => onCancel(_item);
+        _retry.Click += (_, _) => onRetry?.Invoke(_item);
+        _details.Click += (_, _) => ErrorDetailsDialog.ShowDetails(this, _item.ErrorDetails);
+        _folder.Click += (_, _) => onOpenFolder(_item);
+        DrawHelper.ApplyTheme(this);
+        _timer = new System.Windows.Forms.Timer { Interval = 150 };
+        _timer.Tick += (_, _) => RefreshItem();
+        _timer.Start(); RefreshItem();
+    }
 
-        protected override void OnPaint(PaintEventArgs e)
+    private void RefreshItem()
+    {
+        _title.Text = _item.Title;
+        _status.Text = StatusLabel(_item.Status, _item.Progress);
+        _status.AccessibleName = UiText.StatusAccessible(_item.Status, _item.Progress);
+        _progress.Value = Math.Clamp((int)_item.Progress, 0, 100);
+        bool active = _item.Status is DownloadStatus.Pending or DownloadStatus.FetchingInfo or DownloadStatus.Downloading or DownloadStatus.Converting;
+        _cancel.Visible = active;
+        _retry.Visible = _item.Status is DownloadStatus.Failed or DownloadStatus.Cancelled;
+        _details.Visible = _item.Status == DownloadStatus.Failed;
+        _folder.Visible = _item.Status == DownloadStatus.Completed;
+        _progress.Visible = active;
+    }
+
+    private static string StatusLabel(DownloadStatus status, double progress)
+    {
+        string marker = status switch
         {
-            var g = e.Graphics;
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            DownloadStatus.Pending => "[ ]",
+            DownloadStatus.FetchingInfo => "[i]",
+            DownloadStatus.Downloading => "[v]",
+            DownloadStatus.Converting => "[~]",
+            DownloadStatus.Completed => "[+]",
+            DownloadStatus.Failed => "[!]",
+            DownloadStatus.Cancelled => "[-]",
+            _ => "[ ]"
+        };
+        return marker + " " + UiText.StatusText(status, progress);
+    }
 
-            var r = new Rectangle(0, 0, Width - 2, Height - 4);
+    protected override void OnPaintBackground(PaintEventArgs e) => DrawHelper.PaintGlass(e.Graphics, ClientRectangle);
 
-            // Card background
-            DrawHelper.FillRounded(g, r, 12, BgCard);
+    protected override void Dispose(bool disposing) { if (disposing) _timer.Dispose(); base.Dispose(disposing); }
+}
 
-            // Status left accent bar
-            Color accentColor = _item.Status switch
-            {
-                DownloadStatus.Downloading => Red,
-                DownloadStatus.Converting => Color.FromArgb(234, 179, 8),   // amber
-                DownloadStatus.Completed => Green,
-                DownloadStatus.Failed => Color.FromArgb(239, 68, 68),   // red error
-                DownloadStatus.Cancelled => Surface,
-                _ => Color.FromArgb(50, White)
-            };
-            using var accentBrush = new SolidBrush(accentColor);
-            g.FillRectangle(accentBrush, new Rectangle(0, 12, 3, Height - 28));
-
-            // Thumbnail placeholder (left icon)
-            var thumbRect = new Rectangle(16, 14, 48, 48);
-            DrawHelper.FillRounded(g, thumbRect, 8, Color.FromArgb(30, 41, 62));
-            // Music note icon
-            using var iconFont = GetFont(20, FontStyle.Regular);
-            using var iconBrush = new SolidBrush(Color.FromArgb(60, White));
-            g.DrawString("♪", iconFont, iconBrush, thumbRect.X + 12, thumbRect.Y + 10);
-
-            // Title
-            using var titleFont = GetFont(10, FontStyle.Bold);
-            using var titleBrush = new SolidBrush(White);
-            string title = TruncateText(_item.Title, titleFont, g, Width - 200);
-            g.DrawString(title, titleFont, titleBrush, 76, 18);
-
-            // Artist + duration
-            using var subFont = GetFont(9, FontStyle.Regular);
-            using var subBrush = new SolidBrush(Muted);
-            string sub = _item.Artist;
-            if (!string.IsNullOrEmpty(_item.Duration)) sub += $"  •  {_item.Duration}";
-            g.DrawString(sub, subFont, subBrush, 76, 36);
-
-            // Progress bar (only when active)
-            if (_item.Status == DownloadStatus.Downloading ||
-                _item.Status == DownloadStatus.Converting)
-            {
-                var trackRect = new Rectangle(76, 54, Width - 180, 4);
-                DrawHelper.FillRounded(g, trackRect, 2, Surface);
-
-                int fillW = (int)(trackRect.Width * _item.Progress / 100.0);
-                if (fillW > 2)
-                {
-                    using var fillBrush = new System.Drawing.Drawing2D.LinearGradientBrush(
-                        new Rectangle(trackRect.X, trackRect.Y, Math.Max(fillW, 2), trackRect.Height),
-                        Red, RedLight, 0f);
-                    DrawHelper.FillRounded(g, new Rectangle(trackRect.X, trackRect.Y, fillW, trackRect.Height), 2, fillBrush);
-                }
-            }
-
-            // Status badge (right side)
-            string badge = _item.StatusText;
-            Color badgeColor = _item.Status switch
-            {
-                DownloadStatus.Completed => Color.FromArgb(30, 34, 197, 94),
-                DownloadStatus.Failed => Color.FromArgb(30, 239, 68, 68),
-                DownloadStatus.Cancelled => Color.FromArgb(20, White),
-                _ => Color.FromArgb(20, Red)
-            };
-            Color badgeText = _item.Status switch
-            {
-                DownloadStatus.Completed => Green,
-                DownloadStatus.Failed => Color.FromArgb(239, 68, 68),
-                _ => Muted
-            };
-
-            using var badgeFont = GetFont(8, FontStyle.Regular);
-            var badgeSize = g.MeasureString(badge, badgeFont);
-            var badgeRect = new Rectangle(
-                Width - (int)badgeSize.Width - 28,
-                (Height - 22) / 2,
-                (int)badgeSize.Width + 16, 22);
-            DrawHelper.FillRounded(g, badgeRect, 6, badgeColor);
-            using var badgeBrush = new SolidBrush(badgeText);
-            g.DrawString(badge, badgeFont, badgeBrush,
-                badgeRect.X + 8,
-                badgeRect.Y + (badgeRect.Height - badgeSize.Height) / 2);
-
-            // Cancel X (top-right, only when active)
-            if (_item.Status == DownloadStatus.Pending ||
-                _item.Status == DownloadStatus.Downloading ||
-                _item.Status == DownloadStatus.FetchingInfo)
-            {
-                using var xFont = GetFont(9, FontStyle.Regular);
-                using var xBrush = new SolidBrush(Color.FromArgb(80, White));
-                g.DrawString("✕", xFont, xBrush, Width - 22, 8);
-            }
-
-            // Hover open-folder hint
-            if (_item.Status == DownloadStatus.Completed)
-            {
-                using var hintFont = GetFont(8, FontStyle.Regular);
-                using var hintBrush = new SolidBrush(Color.FromArgb(50, White));
-                g.DrawString("📂 Abrir carpeta", hintFont, hintBrush, 76, 56);
-            }
-        }
-
-        protected override void OnMouseClick(MouseEventArgs e)
-        {
-            base.OnMouseClick(e);
-            // Cancel button (top-right 20x20 area)
-            if (e.X > Width - 30 && e.Y < 28)
-                _onCancel(_item);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) _refreshTimer?.Dispose();
-            base.Dispose(disposing);
-        }
-
-        private static string TruncateText(string text, Font font, Graphics g, int maxWidth)
-        {
-            if (g.MeasureString(text, font).Width <= maxWidth) return text;
-            while (text.Length > 3 && g.MeasureString(text + "…", font).Width > maxWidth)
-                text = text[..^1];
-            return text + "…";
-        }
-
-        private static Font GetFont(float size, FontStyle style) =>
-            MainForm.GetFont(size, style);
+internal static class ErrorDetailsDialog
+{
+    public static void ShowDetails(IWin32Window owner, string details)
+    {
+        if (string.IsNullOrWhiteSpace(details)) details = UiText.Get("No hay detalles adicionales. Verificá el enlace y actualizá las herramientas en Ajustes.", "No additional details. Check the link and update the tools in Settings.");
+        using var dialog = new Form { Text = UiText.Get("Detalles del error", "Error details"), Size = new Size(720, 440), MinimumSize = new Size(420, 280), StartPosition = FormStartPosition.CenterParent };
+        var text = new TextBox { Text = details, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, AccessibleName = UiText.Get("Detalles completos del error", "Full error details") };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(6) };
+        var close = new Button { Text = UiText.Get("Cerrar", "Close"), DialogResult = DialogResult.Cancel, AutoSize = true };
+        var copy = new Button { Text = UiText.Get("Copiar detalles", "Copy details"), AutoSize = true };
+        copy.Click += (_, _) => { try { Clipboard.SetText(text.Text); } catch (System.Runtime.InteropServices.ExternalException) { MessageBox.Show(dialog, UiText.Get("El portapapeles está ocupado. Volvé a intentar.", "The clipboard is busy. Try again.")); } };
+        text.KeyDown += (_, e) => { if (e.Control && e.KeyCode == Keys.A) { text.SelectAll(); e.SuppressKeyPress = true; } };
+        buttons.Controls.Add(close); buttons.Controls.Add(copy);
+        dialog.Controls.Add(text); dialog.Controls.Add(buttons); dialog.CancelButton = close;
+        DrawHelper.ApplyTheme(dialog);
+        dialog.ShowDialog(owner);
     }
 }
+

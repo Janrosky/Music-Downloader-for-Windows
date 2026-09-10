@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using OrbixaDownloader.Models;
 using System.Diagnostics;
 
@@ -34,7 +34,7 @@ namespace OrbixaDownloader.Services
                 var psi = new ProcessStartInfo
                 {
                     FileName = _settings.YtDlpPath,
-                    Arguments = $"--dump-json --no-playlist \"{url}\"",
+
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -42,9 +42,21 @@ namespace OrbixaDownloader.Services
                     StandardOutputEncoding = System.Text.Encoding.UTF8
                 };
 
+                foreach (string arg in new[] { "--dump-json", "--no-playlist" }) psi.ArgumentList.Add(arg);
+                DownloadService.AddRuntimeArguments(psi, _settings);
+                psi.ArgumentList.Add("--"); psi.ArgumentList.Add(url);
                 using var process = Process.Start(psi)!;
-                string json = await process.StandardOutput.ReadToEndAsync(ct);
-                await process.WaitForExitAsync(ct);
+                var output = process.StandardOutput.ReadToEndAsync();
+                var error = process.StandardError.ReadToEndAsync();
+                try { await process.WaitForExitAsync(ct); }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(true); } catch (InvalidOperationException) { }
+                    await process.WaitForExitAsync();
+                    throw;
+                }
+                finally { await Task.WhenAll(output, error); }
+                string json = await output;
 
                 if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(json))
                     return null;

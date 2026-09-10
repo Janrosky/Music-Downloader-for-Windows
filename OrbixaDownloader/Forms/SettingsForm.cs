@@ -1,4 +1,4 @@
-﻿using OrbixaDownloader.Models;
+using OrbixaDownloader.Models;
 using OrbixaDownloader.Services;
 
 namespace OrbixaDownloader.Forms
@@ -8,13 +8,13 @@ namespace OrbixaDownloader.Forms
         private readonly AppSettings _settings;
         private readonly UpdaterService _updater;
 
-        private static readonly Color BgDeep = Color.FromArgb(5, 8, 22);
-        private static readonly Color BgCard = Color.FromArgb(13, 18, 36);
-        private static readonly Color Red = Color.FromArgb(219, 41, 85);
-        private static readonly Color RedLight = Color.FromArgb(230, 64, 108);
-        private static readonly Color White = Color.FromArgb(244, 244, 245);
-        private static readonly Color Muted = Color.FromArgb(161, 161, 170);
-        private static readonly Color Surface = Color.FromArgb(31, 41, 55);
+        private static Color BgDeep => DrawHelper.Canvas;
+        private static Color BgCard => DrawHelper.Glass;
+        private static Color Red => DrawHelper.Accent;
+        private static Color RedLight => DrawHelper.SurfaceStrong;
+        private static Color White => DrawHelper.Text;
+        private static Color Muted => DrawHelper.Muted;
+        private static Color Surface => DrawHelper.Field;
 
         // FIX: Ancho interno real del scroll = 560 - 2*28 padding = 504px
         // Todos los controles internos deben usar este ancho como referencia
@@ -26,14 +26,18 @@ namespace OrbixaDownloader.Forms
         public SettingsForm(AppSettings settings)
         {
             _settings = settings;
+            _settings.Normalize();
+            DrawHelper.SetTheme(_settings.Theme, _settings.CustomTheme);
             _updater = new UpdaterService(settings);
             InitForm();
             BuildUI();
+            UiText.Apply(this);
+            DrawHelper.ApplyTheme(this);
         }
 
         private void InitForm()
         {
-            Text = "Ajustes — Orbixa";
+            Text = UiText.Get("Ajustes — Orbixa", "Orbixa Settings");
             Size = new Size(560, 600);
             MinimumSize = new Size(560, 600);
             MaximumSize = new Size(560, 600);
@@ -58,7 +62,7 @@ namespace OrbixaDownloader.Forms
             };
             titleBar.Paint += (_, e) =>
             {
-                using var pen = new Pen(Color.FromArgb(20, 255, 255, 255), 1f);
+                using var pen = new Pen(DrawHelper.Border, 1f);
                 e.Graphics.DrawLine(pen, 0, 47, titleBar.Width, 47);
             };
 
@@ -123,6 +127,80 @@ namespace OrbixaDownloader.Forms
 
             int y = 8;
 
+            y = AddSectionHeader(scroll, UiText.Get("Apariencia", "Appearance"), y);
+            AddFieldLabel(scroll, UiText.Get("Tema:", "Theme:"), 0, y + 7);
+            var themeCombo = MakeCombo(scroll,
+                Enum.GetValues<ThemePreset>().Where(preset => preset is not ThemePreset.SystemHighContrast and not ThemePreset.Personalizado).Select(ThemeName).Append(ThemeName(ThemePreset.SystemHighContrast)).Append(ThemeName(ThemePreset.Personalizado)).ToArray(),
+                ThemeName(_settings.Theme), 82, y, 250);
+            var customSelectors = new[]
+            {
+                MakeCustomCombo(scroll, UiText.Get("Fondo", "Canvas"), _settings.CustomTheme.Canvas, 0, y + 48),
+                MakeCustomCombo(scroll, UiText.Get("Superficie", "Surface"), _settings.CustomTheme.Surface, 168, y + 48),
+                MakeCustomCombo(scroll, UiText.Get("Campo", "Field"), _settings.CustomTheme.Field, 336, y + 48),
+                MakeCustomCombo(scroll, UiText.Get("Acento primario", "Primary accent"), _settings.CustomTheme.Primary, 0, y + 96),
+                MakeCustomCombo(scroll, UiText.Get("Acento secundario", "Secondary accent"), _settings.CustomTheme.Secondary, 168, y + 96),
+                MakeCustomCombo(scroll, UiText.Get("Foco", "Focus"), _settings.CustomTheme.Focus, 336, y + 96)
+            };
+            var preview = new Panel { Left = 0, Top = y + 144, Width = InnerWidth, Height = 34, BackColor = DrawHelper.Field, AccessibleName = UiText.Get("Vista previa del tema", "Theme preview") };
+            preview.Controls.Add(new Label { Text = UiText.Get("Vista previa: texto normal y grande con contraste WCAG", "Preview: normal and large text with WCAG contrast"), AutoSize = true, Left = 10, Top = 8, ForeColor = DrawHelper.Text, BackColor = Color.Transparent });
+            scroll.Controls.Add(preview);
+            customSelectors.ToList().ForEach(combo => combo.Visible = _settings.Theme == ThemePreset.Personalizado);
+            preview.Visible = _settings.Theme == ThemePreset.Personalizado;
+            bool changingCustom = false;
+            CustomThemeSettings lastValidCustom = CloneCustomTheme(_settings.CustomTheme);
+            themeCombo.SelectedIndexChanged += (_, _) =>
+            {
+                var selectablePresets = Enum.GetValues<ThemePreset>().Where(preset => preset is not ThemePreset.SystemHighContrast and not ThemePreset.Personalizado).ToArray();
+                var selected = themeCombo.SelectedIndex < selectablePresets.Length
+                    ? selectablePresets[themeCombo.SelectedIndex]
+                    : themeCombo.SelectedIndex == selectablePresets.Length ? ThemePreset.SystemHighContrast : ThemePreset.Personalizado;
+                if (!DrawHelper.SetTheme(selected, _settings.CustomTheme))
+                {
+                    MessageBox.Show(this, UiText.Get("La combinación de colores no tiene contraste suficiente.", "This color combination does not have sufficient contrast."),
+                        UiText.Get("Tema no válido", "Invalid theme"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    themeCombo.SelectedItem = ThemeName(_settings.Theme);
+                    return;
+                }
+                _settings.Theme = selected;
+                _settings.Save();
+                customSelectors.ToList().ForEach(combo => combo.Visible = selected == ThemePreset.Personalizado);
+                preview.Visible = selected == ThemePreset.Personalizado;
+                DrawHelper.ApplyTheme(this);
+                BackColor = DrawHelper.Canvas;
+            };
+            foreach (var combo in customSelectors)
+                combo.SelectedIndexChanged += (_, _) =>
+                {
+                    if (changingCustom) return;
+                    _settings.CustomTheme = ReadCustomTheme(customSelectors);
+                    if (!DrawHelper.SetTheme(ThemePreset.Personalizado, _settings.CustomTheme))
+                    {
+                        MessageBox.Show(this, UiText.Get("La combinación no cumple el contraste WCAG. Se conserva el último tema válido.", "This combination does not meet WCAG contrast. The last valid theme is kept."), UiText.Get("Tema no válido", "Invalid theme"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        _settings.CustomTheme = CloneCustomTheme(lastValidCustom);
+                        changingCustom = true;
+                        for (int i = 0; i < customSelectors.Length; i++) customSelectors[i].SelectedIndex = (int)new[] { lastValidCustom.Canvas, lastValidCustom.Surface, lastValidCustom.Field, lastValidCustom.Primary, lastValidCustom.Secondary, lastValidCustom.Focus }[i];
+                        changingCustom = false;
+                        return;
+                    }
+                    lastValidCustom = CloneCustomTheme(_settings.CustomTheme);
+                    _settings.Theme = ThemePreset.Personalizado;
+                    _settings.Save();
+                    DrawHelper.ApplyTheme(this);
+                    preview.BackColor = DrawHelper.Field;
+                };
+            AddFieldLabel(scroll, UiText.Get("Idioma:", "Language:"), 0, y + (_settings.Theme == ThemePreset.Personalizado ? 194 : 49));
+            var languageCombo = MakeCombo(scroll, new[] { "Español", "English" },
+                _settings.Language == UiLanguage.English ? "English" : "Español", 82, y + (_settings.Theme == ThemePreset.Personalizado ? 187 : 42), 150);
+            languageCombo.SelectedIndexChanged += (_, _) =>
+            {
+                _settings.Language = languageCombo.SelectedIndex == 1 ? UiLanguage.English : UiLanguage.Espanol;
+                _settings.Save();
+                MessageBox.Show(this,
+                    UiText.Get("El idioma se aplicará a las ventanas nuevas. La ventana principal se actualizará al cerrar Ajustes. Si el reproductor está abierto, cerralo y volvé a abrirlo.", "The language applies to new windows. The main window updates when Settings closes. If the player is open, close and reopen it."),
+                    UiText.Get("Idioma actualizado", "Language updated"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+            y += _settings.Theme == ThemePreset.Personalizado ? 194 : 96;
+
             // ── Carpeta de destino ────────────────────────────────────────────
             y = AddSectionHeader(scroll, "📁  Carpeta de destino", y);
 
@@ -142,6 +220,8 @@ namespace OrbixaDownloader.Forms
             var folderBox = new TextBox
             {
                 Text = _settings.DefaultOutputFolder,
+                ReadOnly = true,
+                AccessibleName = "Carpeta de destino",
                 Font = GetFont(9, FontStyle.Regular),
                 ForeColor = White,
                 BackColor = Surface,
@@ -161,12 +241,14 @@ namespace OrbixaDownloader.Forms
             {
                 using var dlg = new FolderBrowserDialog
                 {
-                    Description = "Seleccioná la carpeta de destino",
+                    Description = UiText.Get("Seleccioná la carpeta de destino", "Select the destination folder"),
                     SelectedPath = _settings.DefaultOutputFolder,
                     UseDescriptionForTitle = true
                 };
                 if (dlg.ShowDialog() == DialogResult.OK)
                 {
+                    try { DownloadService.ValidateOutputFolder(dlg.SelectedPath); }
+                    catch (Exception ex) { ErrorDetailsDialog.ShowDetails(this, ex.Message); return; }
                     folderBox.Text = dlg.SelectedPath;
                     _settings.DefaultOutputFolder = dlg.SelectedPath;
                     _settings.Save();
@@ -222,7 +304,7 @@ namespace OrbixaDownloader.Forms
             // ── Rendimiento ───────────────────────────────────────────────────
             y = AddSectionHeader(scroll, "⚡  Rendimiento", y + 8);
 
-            AddFieldLabel(scroll, "Descargas simultáneas:", 0, y + 7);
+            AddFieldLabel(scroll, "Simultáneas (al reiniciar):", 0, y + 7);
             var concurrentCombo = MakeCombo(scroll,
                 new[] { "1", "2", "3", "4" },
                 _settings.MaxConcurrentDownloads.ToString(),
@@ -246,9 +328,9 @@ namespace OrbixaDownloader.Forms
             // FIX: verLabel con color de acento sutil para distinguirse del texto muted
             var verLabel = new Label
             {
-                Text = $"yt-dlp instalado:  v{_settings.InstalledYtDlpVersion}",
+                Text = string.IsNullOrWhiteSpace(_settings.InstalledYtDlpVersion) ? "yt-dlp: No instalado" : $"yt-dlp: {_settings.InstalledYtDlpVersion}",
                 Font = GetFont(9, FontStyle.Regular),
-                ForeColor = Color.FromArgb(100, 219, 41, 85), // acento rojo tenue
+                ForeColor = DrawHelper.Positive,
                 AutoSize = true,
                 Left = 0,
                 Top = y,
@@ -257,19 +339,34 @@ namespace OrbixaDownloader.Forms
             scroll.Controls.Add(verLabel);
             y += 34;
 
-            var updateNowBtn = MakeRedButton("🔄  Actualizar ahora", 0, y, 190, 36);
+            var updateNowBtn = MakeRedButton(UiText.Get("Actualizar ahora", "Update now"), 0, y, 190, 36);
+            var updateStatus = new Label { Left = 0, Top = y + 44, Width = InnerWidth, Height = 48, ForeColor = Muted, Text = UiText.Get("Verifica yt-dlp, FFmpeg, FFprobe y Deno.", "Checks yt-dlp, FFmpeg, FFprobe and Deno.") };
+            string updateDetails = "";
+            var detailsBtn = MakeRedButton("Ver detalles", 204, y, 140, 36);
+            detailsBtn.Visible = false;
+            detailsBtn.Click += (_, _) => ErrorDetailsDialog.ShowDetails(this, updateDetails);
+            _updater.ProgressChanged += (_, progress) => { if (!IsDisposed) updateStatus.Text = UiText.LocalizeProgress(progress.Message); };
             updateNowBtn.Click += async (_, _) =>
             {
                 updateNowBtn.Enabled = false;
-                updateNowBtn.Text = "⏳  Actualizando...";
-                await _updater.CheckAndUpdateAllAsync();
-                verLabel.Text = $"yt-dlp instalado:  v{_settings.InstalledYtDlpVersion}";
-                updateNowBtn.Enabled = true;
-                updateNowBtn.Text = "🔄  Actualizar ahora";
+                detailsBtn.Visible = false;
+                updateNowBtn.Text = "Actualizando...";
+                try
+                {
+                    await _updater.CheckAndUpdateAllAsync();
+                    verLabel.Text = $"yt-dlp: {_settings.InstalledYtDlpVersion}";
+                    updateStatus.Text = UiText.Get("Herramientas instaladas y verificadas. Ya podés descargar.", "Tools installed and verified. You can download now.");
+                }
+                catch (Exception ex)
+                {
+                    updateDetails = ex.Message;
+                    updateStatus.Text = UiText.Get("No se completó la actualización. Consultá los detalles y reintentá.", "The update did not complete. Check the details and try again.");
+                    detailsBtn.Visible = true;
+                }
+                finally { updateNowBtn.Enabled = true; updateNowBtn.Text = UiText.Get("Actualizar ahora", "Update now"); }
             };
-            scroll.Controls.Add(updateNowBtn);
-            y += 52;
-
+            scroll.Controls.AddRange(new Control[] { updateNowBtn, detailsBtn, updateStatus });
+            y += 104;
             // FIX: Spacer final para que el último botón no quede pegado al borde
             var spacer = new Panel { Left = 0, Top = y, Width = 1, Height = 12, BackColor = Color.Transparent };
             scroll.Controls.Add(spacer);
@@ -303,7 +400,7 @@ namespace OrbixaDownloader.Forms
                 Height = 1,
                 // FIX: Anclar al ancho real del contenedor para que no se salga
                 Width = InnerWidth,
-                BackColor = Color.FromArgb(25, 255, 255, 255),
+                BackColor = DrawHelper.Border,
                 Anchor = AnchorStyles.Left | AnchorStyles.Right
             };
 
@@ -332,7 +429,7 @@ namespace OrbixaDownloader.Forms
                 Text = text,
                 Font = GetFont(10, FontStyle.Regular),
                 // FIX: ForeColor más visible — Muted era muy oscuro para checkboxes
-                ForeColor = Color.FromArgb(200, 200, 210),
+                ForeColor = DrawHelper.Text,
                 BackColor = Color.Transparent,
                 Checked = isChecked,
                 AutoSize = true,
@@ -365,6 +462,37 @@ namespace OrbixaDownloader.Forms
             parent.Controls.Add(cb);
             return cb;
         }
+
+        private ComboBox MakeCustomCombo(Panel parent, string label, CuratedColor selected, int left, int top)
+        {
+            AddFieldLabel(parent, label, left, top);
+            return MakeCombo(parent, Enum.GetValues<CuratedColor>().Select(CuratedColorName).ToArray(), CuratedColorName(selected), left, top + 17, 150);
+        }
+
+        private static CustomThemeSettings ReadCustomTheme(ComboBox[] combos)
+        {
+            CuratedColor Read(ComboBox combo) => Enum.IsDefined(typeof(CuratedColor), combo.SelectedIndex) ? (CuratedColor)combo.SelectedIndex : CuratedColor.Mineral;
+            return new CustomThemeSettings { Canvas = Read(combos[0]), Surface = Read(combos[1]), Field = Read(combos[2]), Primary = Read(combos[3]), Secondary = Read(combos[4]), Focus = Read(combos[5]) };
+        }
+
+        private static CustomThemeSettings CloneCustomTheme(CustomThemeSettings source) => new()
+        {
+            Canvas = source.Canvas,
+            Surface = source.Surface,
+            Field = source.Field,
+            Primary = source.Primary,
+            Secondary = source.Secondary,
+            Focus = source.Focus
+        };
+
+        private static string CuratedColorName(CuratedColor color) => color switch
+        {
+            CuratedColor.Turquesa => UiText.Get("Turquesa", "Turquoise"),
+            CuratedColor.Coral => UiText.Get("Coral", "Coral"),
+            CuratedColor.Cielo => UiText.Get("Cielo", "Sky"),
+            CuratedColor.Grafito => UiText.Get("Grafito", "Graphite"),
+            _ => UiText.Get("Mineral", "Mineral")
+        };
 
         private static Button MakeTitleBtn(string text, Color hoverBg, Action onClick)
         {
@@ -402,12 +530,41 @@ namespace OrbixaDownloader.Forms
             };
             btn.FlatAppearance.BorderSize = 0;
             btn.FlatAppearance.MouseOverBackColor = RedLight;
-            btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(180, 219, 41, 85);
+            btn.FlatAppearance.MouseDownBackColor = DrawHelper.PrimaryDark;
             DrawHelper.MakeRounded(btn, 8);
             return btn;
         }
 
         private static Font GetFont(float size, FontStyle style) =>
             MainForm.GetFont(size, style);
+
+        private static string ThemeName(ThemePreset preset) => preset switch
+        {
+            ThemePreset.CoralNocturno => UiText.Get("Coral Nocturno", "Night Coral"),
+            ThemePreset.TurquesaNocturno => UiText.Get("Turquesa Nocturno", "Night Turquoise"),
+            ThemePreset.CieloArtico => UiText.Get("Cielo Ártico", "Arctic Sky"),
+            ThemePreset.GrafitoSuave => UiText.Get("Grafito Suave", "Soft Graphite"),
+            ThemePreset.AmbarNocturno => UiText.Get("Ámbar Nocturno", "Night Amber"),
+            ThemePreset.MineralTurquesa => UiText.Get("Mineral Turquesa", "Mineral Turquoise"),
+            ThemePreset.MineralCoral => UiText.Get("Mineral Coral", "Mineral Coral"),
+            ThemePreset.CieloCobalto => UiText.Get("Cielo Cobalto", "Cobalt Sky"),
+            ThemePreset.OlivaLimon => UiText.Get("Oliva Limón", "Lime Olive"),
+            ThemePreset.AmapolaAzul => UiText.Get("Amapola Azul", "Blue Poppy"),
+            ThemePreset.ArcillaCielo => UiText.Get("Arcilla Cielo", "Sky Clay"),
+            ThemePreset.ObsidianaAmbar => UiText.Get("Obsidiana Ámbar", "Amber Obsidian"),
+            ThemePreset.MarfilGrafito => UiText.Get("Marfil Grafito", "Graphite Ivory"),
+            ThemePreset.BosqueCobre => UiText.Get("Bosque Cobre", "Copper Forest"),
+            ThemePreset.AzulTintaMandarina => UiText.Get("Azul Tinta Mandarina", "Ink Blue Tangerine"),
+            ThemePreset.PizarraLima => UiText.Get("Pizarra Lima", "Lime Slate"),
+            ThemePreset.OrbixaElevated => UiText.Get("Orbixa Elevado", "Orbixa Elevated"),
+            ThemePreset.OrbixaQuiet => UiText.Get("Orbixa Quieto", "Orbixa Quiet"),
+            ThemePreset.OrbixaNight => UiText.Get("Orbixa Noche", "Orbixa Night"),
+            ThemePreset.GraphiteCalm => UiText.Get("Grafito Calmado", "Graphite Calm"),
+            ThemePreset.OceanGlass => UiText.Get("Cristal Oceánico", "Ocean Glass"),
+            ThemePreset.SunsetGlass => UiText.Get("Cristal Atardecer", "Sunset Glass"),
+            ThemePreset.SystemHighContrast => UiText.Get("Alto contraste del sistema", "System high contrast"),
+            ThemePreset.Personalizado => UiText.Get("Personalizado", "Custom"),
+            _ => UiText.Get("Orbixa Mineral", "Orbixa Mineral")
+        };
     }
 }

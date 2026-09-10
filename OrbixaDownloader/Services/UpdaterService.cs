@@ -1,231 +1,196 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using OrbixaDownloader.Models;
 using System.Diagnostics;
 using System.IO.Compression;
 
-namespace OrbixaDownloader.Services
+namespace OrbixaDownloader.Services;
+
+public class UpdateProgressEventArgs : EventArgs
 {
-    public class UpdateProgressEventArgs : EventArgs
+    public string Message { get; set; } = "";
+    public int Percent { get; set; }
+}
+
+public class UpdaterService
+{
+    private readonly AppSettings _settings;
+    private readonly HttpClient _http;
+    private static readonly SemaphoreSlim UpdateLock = new(1, 1);
+    public event EventHandler<UpdateProgressEventArgs>? ProgressChanged;
+
+    public UpdaterService(AppSettings settings, HttpClient? http = null)
     {
-        public string Message { get; set; } = "";
-        public int Percent { get; set; }
+        _settings = settings;
+        _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
+        if (!_http.DefaultRequestHeaders.UserAgent.Any())
+            _http.DefaultRequestHeaders.UserAgent.ParseAdd("OrbixaDownloader/1.0");
     }
 
-    public class UpdaterService
+    public async Task CheckAndUpdateAllAsync(CancellationToken ct = default)
     {
-        private readonly AppSettings _settings;
-        private readonly HttpClient _http;
-
-        private const string YtDlpReleasesUrl =
-            "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
-        private const string FfmpegReleasesUrl =
-            "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest";
-
-        public event EventHandler<UpdateProgressEventArgs>? ProgressChanged;
-
-        public UpdaterService(AppSettings settings)
+        await UpdateLock.WaitAsync(ct);
+        try
         {
-            _settings = settings;
-            _http = new HttpClient();
-            _http.DefaultRequestHeaders.UserAgent.ParseAdd("OrbixaDownloader/1.0");
-            _http.Timeout = TimeSpan.FromSeconds(30);
-        }
-
-        public async Task CheckAndUpdateAllAsync(CancellationToken ct = default)
-        {
-            _settings.EnsureDirectoriesExist();
-
-            Report("Verificando yt-dlp...", 0);
-            await CheckAndUpdateYtDlpAsync(ct);
-
-            Report("Verificando ffmpeg...", 50);
-            await CheckAndUpdateFfmpegAsync(ct);
-
-            Report("Todo actualizado.", 100);
-        }
-
-        // ─── yt-dlp ───────────────────────────────────────────────────────────
-
-        private async Task CheckAndUpdateYtDlpAsync(CancellationToken ct)
-        {
-            try
+            var errors = new List<string>();
+            foreach (var tool in new[] { "yt-dlp", "ffmpeg", "deno" })
             {
-                string json = await _http.GetStringAsync(YtDlpReleasesUrl, ct);
-                dynamic release = JsonConvert.DeserializeObject(json)!;
-                string latestVersion = (string)release.tag_name;
-
-                bool needsUpdate = !File.Exists(_settings.YtDlpPath)
-                    || _settings.InstalledYtDlpVersion != latestVersion;
-
-                if (!needsUpdate)
-                {
-                    Report($"yt-dlp ya está actualizado ({latestVersion})", 25);
-                    return;
-                }
-
-                Report($"Descargando yt-dlp {latestVersion}...", 10);
-
-                // Buscar el asset yt-dlp.exe en los releases
-                string? downloadUrl = null;
-                foreach (var asset in release.assets)
-                {
-                    string name = (string)asset.name;
-                    if (name == "yt-dlp.exe")
-                    {
-                        downloadUrl = (string)asset.browser_download_url;
-                        break;
-                    }
-                }
-
-                if (downloadUrl == null) return;
-
-                await DownloadFileAsync(downloadUrl, _settings.YtDlpPath, ct);
-
-                _settings.InstalledYtDlpVersion = latestVersion;
-                _settings.Save();
-
-                Report($"yt-dlp {latestVersion} instalado.", 40);
+                try { await UpdateToolAsync(tool, ct); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { errors.Add($"{tool}: {ex.Message}"); }
             }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
+            if (errors.Count > 0)
             {
-                Report($"No se pudo actualizar yt-dlp: {ex.Message}", 40);
+                string message = "Instalación incompleta. Reintentá en Ajustes → Actualizar ahora.\r\n" + string.Join("\r\n", errors);
+                Report(message, 0);
+                throw new InvalidOperationException(message);
             }
+            Report("Herramientas verificadas y actualizadas.", 100);
         }
+        finally { UpdateLock.Release(); }
+    }
 
-        // ─── ffmpeg ───────────────────────────────────────────────────────────
+    internal static bool IsFfmpegAsset(string name) =>
+        name.StartsWith("ffmpeg-", StringComparison.OrdinalIgnoreCase) &&
+        name.EndsWith("-win64-gpl.zip", StringComparison.OrdinalIgnoreCase);
 
-        private async Task CheckAndUpdateFfmpegAsync(CancellationToken ct)
+    private async Task UpdateToolAsync(string tool, CancellationToken ct)
+    {
+        Report($"Verificando {tool}...", 0);
+        string repo = tool switch { "yt-dlp" => "yt-dlp/yt-dlp", "ffmpeg" => "BtbN/FFmpeg-Builds", _ => "denoland/deno" };
+        var release = JObject.Parse(await _http.GetStringAsync($"https://api.github.com/repos/{repo}/releases/latest", ct));
+        string version = release.Value<string>("tag_name") ?? throw new InvalidDataException("Release sin versión.");
+        var asset = release["assets"]?.FirstOrDefault(a => tool switch
         {
-            try
+            "yt-dlp" => (string?)a["name"] == "yt-dlp.exe",
+            "ffmpeg" => IsFfmpegAsset((string?)a["name"] ?? ""),
+            _ => (string?)a["name"] == "deno-x86_64-pc-windows-msvc.zip"
+        }) ?? throw new InvalidDataException($"No se encontró el paquete Windows de {tool}.");
+        string[] destinations = tool switch
+        {
+            "yt-dlp" => new[] { _settings.YtDlpPath },
+            "ffmpeg" => new[] { _settings.FfmpegPath, _settings.FfprobePath },
+            _ => new[] { _settings.DenoPath }
+        };
+        string installed = tool switch { "yt-dlp" => _settings.InstalledYtDlpVersion, "ffmpeg" => _settings.InstalledFfmpegVersion, _ => _settings.InstalledDenoVersion };
+        bool valid = true;
+        foreach (string path in destinations) valid &= await VerifyExecutableAsync(path, ct);
+        if (valid && installed == version) return;
+        string staging = Path.Combine(Path.GetDirectoryName(destinations[0])!, ".update-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+        try
+        {
+            string package = Path.Combine(staging, tool == "yt-dlp" ? "yt-dlp.exe" : "package.zip");
+            Report($"Descargando {tool} {version}...", 10);
+            await DownloadFileAsync((string?)asset["browser_download_url"] ?? throw new InvalidDataException("Paquete sin URL."), package, ct);
+            string[] sources;
+            if (tool == "yt-dlp") sources = new[] { package };
+            else sources = await ExtractToolsAsync(package, staging, destinations.Select(Path.GetFileName).Cast<string>().ToArray(), ct);
+            foreach (string source in sources)
+                if (!await VerifyExecutableAsync(source, ct)) throw new InvalidDataException($"{Path.GetFileName(source)} no pasó la verificación de versión.");
+            ct.ThrowIfCancellationRequested();
+            InstallFiles(sources, destinations);
+            if (tool == "yt-dlp") _settings.InstalledYtDlpVersion = version;
+            else if (tool == "ffmpeg") _settings.InstalledFfmpegVersion = version;
+            else _settings.InstalledDenoVersion = version;
+            _settings.Save();
+            Report($"{tool} {version} instalado y verificado.", 95);
+        }
+        finally { try { Directory.Delete(staging, true); } catch { } }
+    }
+
+    internal static async Task<string[]> ExtractToolsAsync(string zipPath, string target, string[] names, CancellationToken ct)
+    {
+        using var zip = ZipFile.OpenRead(zipPath);
+        var entries = names.Select(name => zip.Entries.SingleOrDefault(e => e.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidDataException($"El paquete no contiene {name}. Reintentá la actualización.")).ToArray();
+        var result = new List<string>();
+        foreach (var entry in entries)
+        {
+            string path = Path.Combine(target, entry.Name);
+            await using var input = entry.Open();
+            await using var output = File.Create(path);
+            await input.CopyToAsync(output, ct);
+            result.Add(path);
+        }
+        return result.ToArray();
+    }
+
+    // Each replacement is atomic; backups roll back the pair if either tool is locked.
+    internal static void InstallFiles(string[] sources, string[] destinations)
+    {
+        var backups = new Dictionary<string, string>();
+        var installed = new List<string>();
+        try
+        {
+            for (int i = 0; i < sources.Length; i++)
             {
-                // Si ya existe ffmpeg y no hay versión nueva disponible fácil de comparar,
-                // solo lo descargamos si no existe en disco.
-                if (File.Exists(_settings.FfmpegPath))
+                string destination = destinations[i];
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                if (File.Exists(destination))
                 {
-                    Report("ffmpeg ya está instalado.", 75);
-                    return;
+                    string backup = destination + ".backup-" + Guid.NewGuid().ToString("N");
+                    File.Replace(sources[i], destination, backup);
+                    backups.Add(destination, backup);
                 }
-
-                Report("Descargando ffmpeg (primera instalación)...", 55);
-
-                string json = await _http.GetStringAsync(FfmpegReleasesUrl, ct);
-                dynamic release = JsonConvert.DeserializeObject(json)!;
-
-                // Buscamos el build essentials win64
-                string? downloadUrl = null;
-                foreach (var asset in release.assets)
-                {
-                    string name = (string)asset.name;
-                    if (name.Contains("win64") && name.Contains("essentials") && name.EndsWith(".zip"))
-                    {
-                        downloadUrl = (string)asset.browser_download_url;
-                        break;
-                    }
-                }
-
-                if (downloadUrl == null)
-                {
-                    Report("No se encontró build de ffmpeg para Windows.", 90);
-                    return;
-                }
-
-                string zipPath = Path.Combine(Path.GetTempPath(), "ffmpeg_temp.zip");
-                await DownloadFileAsync(downloadUrl, zipPath, ct);
-
-                Report("Extrayendo ffmpeg...", 85);
-                await ExtractFfmpegAsync(zipPath, ct);
-
-                Report("ffmpeg instalado.", 95);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                Report($"No se pudo instalar ffmpeg: {ex.Message}", 95);
+                else File.Move(sources[i], destination);
+                installed.Add(destination);
             }
         }
-
-        private async Task ExtractFfmpegAsync(string zipPath, CancellationToken ct)
+        catch
         {
-            string extractDir = Path.Combine(Path.GetTempPath(), "ffmpeg_extract");
-
-            if (Directory.Exists(extractDir))
-                Directory.Delete(extractDir, true);
-
-            await Task.Run(() => ZipFile.ExtractToDirectory(zipPath, extractDir), ct);
-
-            // ffmpeg.exe está dentro de una subcarpeta /bin/
-            string? ffmpegExe = Directory
-                .GetFiles(extractDir, "ffmpeg.exe", SearchOption.AllDirectories)
-                .FirstOrDefault();
-
-            if (ffmpegExe != null)
-                File.Copy(ffmpegExe, _settings.FfmpegPath, overwrite: true);
-
-            // Limpiar temporales
-            try
+            foreach (string destination in installed.AsEnumerable().Reverse())
             {
-                File.Delete(zipPath);
-                Directory.Delete(extractDir, true);
+                if (backups.TryGetValue(destination, out string? backup)) File.Move(backup, destination, true);
+                else File.Delete(destination);
             }
-            catch { /* No crítico */ }
+            throw;
         }
+        finally { foreach (string backup in backups.Values) { try { File.Delete(backup); } catch { } } }
+    }
 
-        // ─── Helpers ──────────────────────────────────────────────────────────
-
-        private async Task DownloadFileAsync(string url, string destPath, CancellationToken ct)
+    internal async Task DownloadFileAsync(string url, string destination, CancellationToken ct)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        string temporary = destination + ".partial-" + Guid.NewGuid().ToString("N");
+        try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-
             using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
             response.EnsureSuccessStatusCode();
-
-            long total = response.Content.Headers.ContentLength ?? 0;
-            using var stream = await response.Content.ReadAsStreamAsync(ct);
-            using var file = File.Create(destPath);
-
-            var buffer = new byte[81920];
-            long downloaded = 0;
-            int read;
-
-            while ((read = await stream.ReadAsync(buffer, ct)) > 0)
+            await using (var input = await response.Content.ReadAsStreamAsync(ct))
+            await using (var output = File.Create(temporary))
             {
-                await file.WriteAsync(buffer.AsMemory(0, read), ct);
-                downloaded += read;
-
-                if (total > 0)
-                {
-                    int pct = (int)(downloaded * 100 / total);
-                    Report($"Descargando... {pct}%", pct);
-                }
+                await input.CopyToAsync(output, ct);
+                if (output.Length == 0 || (response.Content.Headers.ContentLength is long expected && output.Length != expected))
+                    throw new InvalidDataException("Descarga incompleta.");
             }
+            ct.ThrowIfCancellationRequested();
+            File.Move(temporary, destination, true);
         }
-
-        public string GetInstalledYtDlpVersion()
-        {
-            try
-            {
-                if (!File.Exists(_settings.YtDlpPath)) return "No instalado";
-
-                var psi = new ProcessStartInfo(_settings.YtDlpPath, "--version")
-                {
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var p = Process.Start(psi)!;
-                string ver = p.StandardOutput.ReadToEnd().Trim();
-                p.WaitForExit();
-                return ver;
-            }
-            catch { return "Desconocido"; }
-        }
-
-        private void Report(string message, int percent) =>
-            ProgressChanged?.Invoke(this, new UpdateProgressEventArgs
-            {
-                Message = message,
-                Percent = percent
-            });
+        finally { try { File.Delete(temporary); } catch { } }
     }
+
+    internal static async Task<bool> VerifyExecutableAsync(string path, CancellationToken ct)
+    {
+        if (!File.Exists(path)) return false;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        try
+        {
+            var start = new ProcessStartInfo(path, Path.GetFileName(path).StartsWith("ff", StringComparison.OrdinalIgnoreCase) ? "-version" : "--version")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            using var process = Process.Start(start)!;
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch { try { process.Kill(true); } catch { } throw; }
+            await stderr;
+            return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(await stdout);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
+        catch (OperationCanceledException) { throw; }
+        catch { return false; }
+    }
+
+    public string GetInstalledYtDlpVersion() => _settings.InstalledYtDlpVersion;
+    private void Report(string message, int percent) => ProgressChanged?.Invoke(this, new UpdateProgressEventArgs { Message = message, Percent = percent });
 }

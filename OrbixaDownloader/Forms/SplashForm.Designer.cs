@@ -19,7 +19,7 @@
             this.ClientSize = new Size(520, 320);
             this.FormBorderStyle = FormBorderStyle.None;
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Color.FromArgb(5, 8, 22);
+            this.BackColor = OrbixaDownloader.Forms.DrawHelper.Canvas;
             this.Name = "SplashForm";
             this.Text = "Orbixa Downloader";
             this.DoubleBuffered = true;

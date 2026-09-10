@@ -1,4 +1,4 @@
-﻿using OrbixaDownloader.Models;
+using OrbixaDownloader.Models;
 using WMPLib;
 
 namespace OrbixaDownloader.Forms
@@ -6,14 +6,14 @@ namespace OrbixaDownloader.Forms
     public class PlayerForm : Form
     {
         // ── Colors ────────────────────────────────────────────────────────────
-        private static readonly Color BgDeep = Color.FromArgb(5, 8, 22);
-        private static readonly Color BgCard = Color.FromArgb(13, 18, 36);
-        private static readonly Color Red = Color.FromArgb(219, 41, 85);
-        private static readonly Color RedLight = Color.FromArgb(230, 64, 108);
-        private static readonly Color White = Color.FromArgb(244, 244, 245);
-        private static readonly Color Muted = Color.FromArgb(161, 161, 170);
-        private static readonly Color Surface = Color.FromArgb(31, 41, 55);
-        private static readonly Color Surface2 = Color.FromArgb(20, 27, 45);
+        private static Color BgDeep => DrawHelper.Canvas;
+        private static Color BgCard => DrawHelper.Glass;
+        private static Color Red => DrawHelper.Accent;
+        private static Color RedLight => DrawHelper.SurfaceStrong;
+        private static Color White => DrawHelper.Text;
+        private static Color Muted => DrawHelper.Muted;
+        private static Color Surface => DrawHelper.Glass;
+        private static Color Surface2 => DrawHelper.Field;
 
         // Extensiones soportadas para búsqueda en carpeta
         private static readonly string[] SupportedExtensions =
@@ -53,6 +53,8 @@ namespace OrbixaDownloader.Forms
         {
             InitForm();
             BuildUI();
+            UiText.Apply(this);
+            DrawHelper.ApplyTheme(this);
             InitWMP();
             SetupTimer();
 
@@ -88,10 +90,7 @@ namespace OrbixaDownloader.Forms
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    $"No se pudo inicializar Windows Media Player:\n{ex.Message}\n\n" +
-                    "Asegurate de tener WMP instalado y habilitado en Windows.\n\n" +
-                    "Ejecuta en PowerShell como Admin:\n" +
-                    "Enable-WindowsOptionalFeature -Online -FeatureName 'WindowsMediaPlayer'",
+                    UiText.Get($"No se pudo inicializar Windows Media Player:\n{ex.Message}\n\nAsegurate de tener WMP instalado y habilitado en Windows.\n\nEjecuta en PowerShell como Admin:\nEnable-WindowsOptionalFeature -Online -FeatureName 'WindowsMediaPlayer'", $"Windows Media Player could not be initialized:\n{ex.Message}\n\nMake sure WMP is installed and enabled in Windows.\n\nRun in PowerShell as Administrator:\nEnable-WindowsOptionalFeature -Online -FeatureName 'WindowsMediaPlayer'"),
                     "Orbixa Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -110,7 +109,7 @@ namespace OrbixaDownloader.Forms
             _titleBar = new Panel { Dock = DockStyle.Top, Height = 48, BackColor = BgCard };
             _titleBar.Paint += (_, e) =>
             {
-                using var pen = new Pen(Color.FromArgb(20, 255, 255, 255), 1f);
+                using var pen = new Pen(DrawHelper.Border, 1f);
                 e.Graphics.DrawLine(pen, 0, 47, _titleBar.Width, 47);
             };
             _titleBar.MouseDown += (_, e) => { _dragging = true; _dragStart = e.Location; };
@@ -166,8 +165,8 @@ namespace OrbixaDownloader.Forms
             _artworkLabel = new Label
             {
                 Text = "♪",
-                Font = new Font("Segoe UI Emoji", 64),
-                ForeColor = Color.FromArgb(35, White),
+                Font = GetFont(64, FontStyle.Regular),
+                ForeColor = DrawHelper.Muted,
                 AutoSize = false,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -258,7 +257,7 @@ namespace OrbixaDownloader.Forms
             var plHeader = new Panel { Dock = DockStyle.Top, Height = 52, BackColor = BgCard };
             plHeader.Paint += (_, e) =>
             {
-                using var pen = new Pen(Color.FromArgb(20, 255, 255, 255), 1f);
+                using var pen = new Pen(DrawHelper.Border, 1f);
                 e.Graphics.DrawLine(pen, 0, 51, plHeader.Width, 51);
             };
 
@@ -294,7 +293,7 @@ namespace OrbixaDownloader.Forms
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             DrawHelper.DrawGlow(g,
                 _artworkPanel.Width / 2, _artworkPanel.Height / 2, 120,
-                Color.FromArgb(_currentIndex >= 0 ? 30 : 10, 219, 41, 85));
+                DrawHelper.PrimaryDark);
         }
 
         // ── Carga de archivos ─────────────────────────────────────────────────
@@ -303,7 +302,7 @@ namespace OrbixaDownloader.Forms
         {
             using var dlg = new OpenFileDialog
             {
-                Title = "Agregar archivos",
+                Title = UiText.Get("Agregar archivos", "Add files"),
                 Filter = "Audio/Video|*.mp3;*.m4a;*.flac;*.wav;*.ogg;*.mp4;*.mkv;*.webm;*.avi|Todos|*.*",
                 Multiselect = true
             };
@@ -321,7 +320,7 @@ namespace OrbixaDownloader.Forms
         {
             using var dlg = new FolderBrowserDialog
             {
-                Description = "Seleccioná una carpeta para cargar su música",
+                Description = UiText.Get("Seleccioná una carpeta para cargar su música", "Select a folder to load music"),
                 UseDescriptionForTitle = true
             };
             if (dlg.ShowDialog() != DialogResult.OK) return;
@@ -330,7 +329,7 @@ namespace OrbixaDownloader.Forms
 
             // Preguntar si incluir subcarpetas
             var includeSubfolders = MessageBox.Show(
-                "¿Incluir archivos de subcarpetas también?",
+                UiText.Get("¿Incluir archivos de subcarpetas también?", "Include files from subfolders too?"),
                 "Orbixa Player",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question) == DialogResult.Yes;
@@ -349,7 +348,7 @@ namespace OrbixaDownloader.Forms
             if (files.Count == 0)
             {
                 MessageBox.Show(
-                    "No se encontraron archivos de audio o video en esa carpeta.",
+                    UiText.Get("No se encontraron archivos de audio o video en esa carpeta.", "No audio or video files were found in that folder."),
                     "Orbixa Player", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -388,8 +387,8 @@ namespace OrbixaDownloader.Forms
                 var p = (Panel)s!; int idx = (int)p.Tag!; bool cur = idx == _currentIndex;
                 var r = new Rectangle(0, 0, p.Width - 2, p.Height - 2);
                 DrawHelper.FillRounded(e.Graphics, r, 10,
-                    cur ? Color.FromArgb(45, 219, 41, 85) : Color.FromArgb(12, 255, 255, 255));
-                if (cur) DrawHelper.DrawRounded(e.Graphics, r, 10, Color.FromArgb(80, 219, 41, 85), 1f);
+                    cur ? DrawHelper.SurfaceStrong : DrawHelper.Glass);
+                if (cur) DrawHelper.DrawRounded(e.Graphics, r, 10, DrawHelper.BorderHighlight, 1f);
             };
             row.Click += (_, _) => PlayAt((int)row.Tag!);
 
@@ -397,7 +396,7 @@ namespace OrbixaDownloader.Forms
             {
                 Text = $"{index + 1}",
                 Font = GetFont(9, FontStyle.Regular),
-                ForeColor = Color.FromArgb(55, White),
+                ForeColor = DrawHelper.Muted,
                 BackColor = Color.Transparent,
                 AutoSize = false,
                 Width = 28,
@@ -410,8 +409,8 @@ namespace OrbixaDownloader.Forms
             {
                 Text = ext,
                 Font = GetFont(7, FontStyle.Bold),
-                ForeColor = isVideo ? Color.FromArgb(250, 204, 21) : Red,
-                BackColor = isVideo ? Color.FromArgb(20, 250, 204, 21) : Color.FromArgb(20, 219, 41, 85),
+                ForeColor = isVideo ? DrawHelper.Focus : Red,
+                BackColor = isVideo ? DrawHelper.SurfaceStrong : DrawHelper.Glass,
                 AutoSize = false,
                 Width = 38,
                 Height = 18,
@@ -436,7 +435,7 @@ namespace OrbixaDownloader.Forms
             {
                 Text = "✕",
                 Font = GetFont(9, FontStyle.Regular),
-                ForeColor = Color.FromArgb(40, White),
+                ForeColor = DrawHelper.Muted,
                 BackColor = Color.Transparent,
                 AutoSize = false,
                 Width = 28,
@@ -446,7 +445,7 @@ namespace OrbixaDownloader.Forms
                 Anchor = AnchorStyles.Top | AnchorStyles.Right
             };
             xBtn.MouseEnter += (_, _) => xBtn.ForeColor = Red;
-            xBtn.MouseLeave += (_, _) => xBtn.ForeColor = Color.FromArgb(40, White);
+            xBtn.MouseLeave += (_, _) => xBtn.ForeColor = DrawHelper.Muted;
             xBtn.Click += (_, _) => RemoveAt((int)row.Tag!);
 
             row.Controls.AddRange(new Control[] { num, badge, nameLbl, xBtn });
@@ -516,7 +515,7 @@ namespace OrbixaDownloader.Forms
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[PlayAt] Error: {ex.Message}");
-                MessageBox.Show($"No se pudo reproducir el archivo:\n{ex.Message}",
+                MessageBox.Show(UiText.Get($"No se pudo reproducir el archivo:\n{ex.Message}", $"The file could not be played:\n{ex.Message}"),
                     "Orbixa Player", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally { _isChangingTrack = false; }
@@ -569,14 +568,14 @@ namespace OrbixaDownloader.Forms
         private void ToggleShuffle()
         {
             _shuffle = !_shuffle;
-            _shuffleBtn.BackColor = _shuffle ? Color.FromArgb(40, 219, 41, 85) : Surface;
+            _shuffleBtn.BackColor = _shuffle ? DrawHelper.SurfaceStrong : Surface;
             _shuffleBtn.ForeColor = _shuffle ? Red : Muted;
         }
 
         private void ToggleRepeat()
         {
             _repeat = !_repeat;
-            _repeatBtn.BackColor = _repeat ? Color.FromArgb(40, 219, 41, 85) : Surface;
+            _repeatBtn.BackColor = _repeat ? DrawHelper.SurfaceStrong : Surface;
             _repeatBtn.ForeColor = _repeat ? Red : Muted;
         }
 
@@ -621,8 +620,7 @@ namespace OrbixaDownloader.Forms
                     if (pMediaObject is IWMPMedia m)
                         errorInfo = $"Archivo: {Path.GetFileName(m.sourceURL)}\n{errorInfo}";
                     MessageBox.Show(
-                        $"Error al reproducir:\n{errorInfo}\n\n" +
-                        "Asegurate de tener los codecs necesarios instalados (K-Lite Codec Pack).",
+                        UiText.Get($"Error al reproducir:\n{errorInfo}\n\nAsegurate de tener los codecs necesarios instalados (K-Lite Codec Pack).", $"Playback error:\n{errorInfo}\n\nMake sure the required codecs are installed (K-Lite Codec Pack)."),
                         "Orbixa Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 });
             }
@@ -677,7 +675,7 @@ namespace OrbixaDownloader.Forms
                 Text = icon,
                 Font = GetFont(w >= 56 ? 18 : 13, FontStyle.Regular),
                 ForeColor = bg == Red ? White : Muted,
-                BackColor = bg == Color.Transparent ? Color.FromArgb(0, 0, 0, 0) : bg,
+                BackColor = bg == Color.Transparent ? Color.Transparent : bg,
                 FlatStyle = FlatStyle.Flat,
                 Left = left,
                 Top = top,
@@ -686,7 +684,7 @@ namespace OrbixaDownloader.Forms
                 Cursor = Cursors.Hand
             };
             btn.FlatAppearance.BorderSize = 0;
-            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(30, 255, 255, 255);
+            btn.FlatAppearance.MouseOverBackColor = DrawHelper.SurfaceStrong;
             btn.Click += (_, _) => onClick();
             DrawHelper.MakeRounded(btn, h / 2);
             return btn;
@@ -721,7 +719,7 @@ namespace OrbixaDownloader.Forms
                 Text = text,
                 Font = GetFont(10, FontStyle.Regular),
                 ForeColor = Red,
-                BackColor = Color.FromArgb(18, 219, 41, 85),
+                BackColor = DrawHelper.Glass,
                 FlatStyle = FlatStyle.Flat,
                 Left = left,
                 Top = top,
@@ -730,8 +728,8 @@ namespace OrbixaDownloader.Forms
                 Cursor = Cursors.Hand
             };
             btn.FlatAppearance.BorderSize = 1;
-            btn.FlatAppearance.BorderColor = Color.FromArgb(80, 219, 41, 85);
-            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, 219, 41, 85);
+            btn.FlatAppearance.BorderColor = DrawHelper.Border;
+            btn.FlatAppearance.MouseOverBackColor = DrawHelper.SurfaceStrong;
             DrawHelper.MakeRounded(btn, 10);
             return btn;
         }
