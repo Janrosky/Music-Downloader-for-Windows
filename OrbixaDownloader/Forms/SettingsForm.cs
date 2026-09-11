@@ -16,9 +16,8 @@ namespace OrbixaDownloader.Forms
         private static Color Muted => DrawHelper.Muted;
         private static Color Surface => DrawHelper.Field;
 
-        // FIX: Ancho interno real del scroll = 560 - 2*28 padding = 504px
-        // Todos los controles internos deben usar este ancho como referencia
-        private const int InnerWidth = 504;
+        private const int InnerWidth = 552;
+        private const int CustomAppearanceExtraHeight = 260;
 
         private bool _dragging;
         private Point _dragStart;
@@ -38,9 +37,8 @@ namespace OrbixaDownloader.Forms
         private void InitForm()
         {
             Text = UiText.Get("Ajustes — Orbixa", "Orbixa Settings");
-            Size = new Size(560, 600);
-            MinimumSize = new Size(560, 600);
-            MaximumSize = new Size(560, 600);
+            Size = new Size(640, 720);
+            MinimumSize = new Size(640, 640);
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterParent;
             BackColor = BgDeep;
@@ -102,8 +100,8 @@ namespace OrbixaDownloader.Forms
                 minBtn.Left = titleBar.Width - 80;
             };
             // Forzar posición inicial (el Resize no dispara al primer render)
-            closeBtn.Left = 560 - 40;
-            minBtn.Left = 560 - 80;
+            closeBtn.Left = ClientSize.Width - 40;
+            minBtn.Left = ClientSize.Width - 80;
 
             // ── Scroll container ──────────────────────────────────────────────
             var scroll = new Panel
@@ -111,9 +109,8 @@ namespace OrbixaDownloader.Forms
                 Dock = DockStyle.Fill,
                 AutoScroll = true,
                 BackColor = BgDeep,
-                // FIX: Padding uniforme — todos los controles hijos usan Left=0
-                // y el panel aplica 28px de margen horizontal automáticamente
-                Padding = new Padding(28, 20, 28, 20)
+                Padding = new Padding(28, 20, 28, 20),
+                Tag = DrawHelper.PreserveSurfaceTag
             };
 
             // Drag desde el fondo del scroll también
@@ -132,42 +129,35 @@ namespace OrbixaDownloader.Forms
             var themeCombo = MakeCombo(scroll,
                 Enum.GetValues<ThemePreset>().Where(preset => preset is not ThemePreset.SystemHighContrast and not ThemePreset.Personalizado).Select(ThemeName).Append(ThemeName(ThemePreset.SystemHighContrast)).Append(ThemeName(ThemePreset.Personalizado)).ToArray(),
                 ThemeName(_settings.Theme), 82, y, 250);
+            var customThemePanel = new Panel
+            {
+                Left = 0,
+                Top = y + 48,
+                Width = InnerWidth,
+                Height = 238,
+                BackColor = BgDeep,
+                Tag = DrawHelper.PreserveSurfaceTag,
+                Visible = _settings.Theme == ThemePreset.Personalizado
+            };
+            const int customColumnWidth = 264;
+            const int customColumnGap = 24;
+            const int customRowHeight = 58;
             var customSelectors = new[]
             {
-                MakeCustomCombo(scroll, UiText.Get("Fondo", "Canvas"), _settings.CustomTheme.Canvas, 0, y + 48),
-                MakeCustomCombo(scroll, UiText.Get("Superficie", "Surface"), _settings.CustomTheme.Surface, 168, y + 48),
-                MakeCustomCombo(scroll, UiText.Get("Campo", "Field"), _settings.CustomTheme.Field, 336, y + 48),
-                MakeCustomCombo(scroll, UiText.Get("Acento primario", "Primary accent"), _settings.CustomTheme.Primary, 0, y + 96),
-                MakeCustomCombo(scroll, UiText.Get("Acento secundario", "Secondary accent"), _settings.CustomTheme.Secondary, 168, y + 96),
-                MakeCustomCombo(scroll, UiText.Get("Foco", "Focus"), _settings.CustomTheme.Focus, 336, y + 96)
+                MakeCustomCombo(customThemePanel, UiText.Get("Fondo", "Canvas"), _settings.CustomTheme.Canvas, 0, 0, customColumnWidth),
+                MakeCustomCombo(customThemePanel, UiText.Get("Superficie", "Surface"), _settings.CustomTheme.Surface, customColumnWidth + customColumnGap, 0, customColumnWidth),
+                MakeCustomCombo(customThemePanel, UiText.Get("Campo", "Field"), _settings.CustomTheme.Field, 0, customRowHeight, customColumnWidth),
+                MakeCustomCombo(customThemePanel, UiText.Get("Acento primario", "Primary accent"), _settings.CustomTheme.Primary, customColumnWidth + customColumnGap, customRowHeight, customColumnWidth),
+                MakeCustomCombo(customThemePanel, UiText.Get("Acento secundario", "Secondary accent"), _settings.CustomTheme.Secondary, 0, customRowHeight * 2, customColumnWidth),
+                MakeCustomCombo(customThemePanel, UiText.Get("Foco", "Focus"), _settings.CustomTheme.Focus, customColumnWidth + customColumnGap, customRowHeight * 2, customColumnWidth)
             };
-            var preview = new Panel { Left = 0, Top = y + 144, Width = InnerWidth, Height = 34, BackColor = DrawHelper.Field, AccessibleName = UiText.Get("Vista previa del tema", "Theme preview") };
-            preview.Controls.Add(new Label { Text = UiText.Get("Vista previa: texto normal y grande con contraste WCAG", "Preview: normal and large text with WCAG contrast"), AutoSize = true, Left = 10, Top = 8, ForeColor = DrawHelper.Text, BackColor = Color.Transparent });
-            scroll.Controls.Add(preview);
-            customSelectors.ToList().ForEach(combo => combo.Visible = _settings.Theme == ThemePreset.Personalizado);
-            preview.Visible = _settings.Theme == ThemePreset.Personalizado;
+            var preview = new Panel { Left = 0, Top = 190, Width = InnerWidth, Height = 48, BackColor = DrawHelper.Field, AccessibleName = UiText.Get("Vista previa del tema", "Theme preview"), Tag = DrawHelper.PreserveSurfaceTag };
+            DrawHelper.MakeRounded(preview, 10);
+            preview.Controls.Add(new Label { Text = UiText.Get("Vista previa: texto normal y grande con contraste WCAG", "Preview: normal and large text with WCAG contrast"), AutoSize = true, Left = 14, Top = 14, ForeColor = DrawHelper.Text, BackColor = Color.Transparent });
+            customThemePanel.Controls.Add(preview);
+            scroll.Controls.Add(customThemePanel);
             bool changingCustom = false;
             CustomThemeSettings lastValidCustom = CloneCustomTheme(_settings.CustomTheme);
-            themeCombo.SelectedIndexChanged += (_, _) =>
-            {
-                var selectablePresets = Enum.GetValues<ThemePreset>().Where(preset => preset is not ThemePreset.SystemHighContrast and not ThemePreset.Personalizado).ToArray();
-                var selected = themeCombo.SelectedIndex < selectablePresets.Length
-                    ? selectablePresets[themeCombo.SelectedIndex]
-                    : themeCombo.SelectedIndex == selectablePresets.Length ? ThemePreset.SystemHighContrast : ThemePreset.Personalizado;
-                if (!DrawHelper.SetTheme(selected, _settings.CustomTheme))
-                {
-                    MessageBox.Show(this, UiText.Get("La combinación de colores no tiene contraste suficiente.", "This color combination does not have sufficient contrast."),
-                        UiText.Get("Tema no válido", "Invalid theme"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    themeCombo.SelectedItem = ThemeName(_settings.Theme);
-                    return;
-                }
-                _settings.Theme = selected;
-                _settings.Save();
-                customSelectors.ToList().ForEach(combo => combo.Visible = selected == ThemePreset.Personalizado);
-                preview.Visible = selected == ThemePreset.Personalizado;
-                DrawHelper.ApplyTheme(this);
-                BackColor = DrawHelper.Canvas;
-            };
             foreach (var combo in customSelectors)
                 combo.SelectedIndexChanged += (_, _) =>
                 {
@@ -188,9 +178,19 @@ namespace OrbixaDownloader.Forms
                     DrawHelper.ApplyTheme(this);
                     preview.BackColor = DrawHelper.Field;
                 };
-            AddFieldLabel(scroll, UiText.Get("Idioma:", "Language:"), 0, y + (_settings.Theme == ThemePreset.Personalizado ? 194 : 49));
+            var languageLabel = new Label
+            {
+                Text = UiText.Get("Idioma:", "Language:"),
+                Font = GetFont(9, FontStyle.Regular),
+                ForeColor = Muted,
+                AutoSize = true,
+                Left = 0,
+                Top = y + 49,
+                BackColor = Color.Transparent
+            };
+            scroll.Controls.Add(languageLabel);
             var languageCombo = MakeCombo(scroll, new[] { "Español", "English" },
-                _settings.Language == UiLanguage.English ? "English" : "Español", 82, y + (_settings.Theme == ThemePreset.Personalizado ? 187 : 42), 150);
+                _settings.Language == UiLanguage.English ? "English" : "Español", 82, y + 42, 150);
             languageCombo.SelectedIndexChanged += (_, _) =>
             {
                 _settings.Language = languageCombo.SelectedIndex == 1 ? UiLanguage.English : UiLanguage.Espanol;
@@ -199,10 +199,11 @@ namespace OrbixaDownloader.Forms
                     UiText.Get("El idioma se aplicará a las ventanas nuevas. La ventana principal se actualizará al cerrar Ajustes. Si el reproductor está abierto, cerralo y volvé a abrirlo.", "The language applies to new windows. The main window updates when Settings closes. If the player is open, close and reopen it."),
                     UiText.Get("Idioma actualizado", "Language updated"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
-            y += _settings.Theme == ThemePreset.Personalizado ? 194 : 96;
+            y += 96;
+            int postAppearanceTop = y;
 
             // ── Carpeta de destino ────────────────────────────────────────────
-            y = AddSectionHeader(scroll, "📁  Carpeta de destino", y);
+            y = AddSectionHeader(scroll, UiText.Get("Carpeta de destino", "Destination folder"), y);
 
             // FIX: folderBox envuelto en un panel contenedor con borde sutil
             // para que se vea correctamente con BorderStyle.None
@@ -213,7 +214,8 @@ namespace OrbixaDownloader.Forms
                 // FIX: Ancho calculado para dejar espacio al botón (110px) + gap (8px)
                 Width = InnerWidth - 118,
                 Height = 34,
-                BackColor = Surface
+                BackColor = Surface,
+                Tag = DrawHelper.PreserveSurfaceTag
             };
             DrawHelper.MakeRounded(folderContainer, 8);
 
@@ -226,9 +228,7 @@ namespace OrbixaDownloader.Forms
                 ForeColor = White,
                 BackColor = Surface,
                 BorderStyle = BorderStyle.None,
-                Dock = DockStyle.Fill,
-                // FIX: Padding interno para que el texto no quede pegado al borde
-                Margin = new Padding(8, 0, 8, 0)
+                Tag = DrawHelper.PreserveSurfaceTag
             };
             // TextBox no respeta Padding con Dock.Fill — usar Location manual
             folderBox.Location = new Point(8, 8);
@@ -259,7 +259,7 @@ namespace OrbixaDownloader.Forms
             y += 50;
 
             // ── Formato por defecto ───────────────────────────────────────────
-            y = AddSectionHeader(scroll, "🎵  Formato por defecto", y + 8);
+            y = AddSectionHeader(scroll, UiText.Get("Formato por defecto", "Default format"), y + 16);
 
             // FIX: Labels y combos alineados con espaciado consistente
             AddFieldLabel(scroll, "Audio:", 0, y + 7);
@@ -287,7 +287,7 @@ namespace OrbixaDownloader.Forms
             y += 50;
 
             // ── Metadata ──────────────────────────────────────────────────────
-            y = AddSectionHeader(scroll, "🏷  Metadata", y + 8);
+            y = AddSectionHeader(scroll, "Metadata", y + 16);
 
             var embedThumb = AddToggle(scroll,
                 "Incrustar thumbnail en el archivo", _settings.EmbedThumbnail, y);
@@ -302,7 +302,7 @@ namespace OrbixaDownloader.Forms
             y += 48;
 
             // ── Rendimiento ───────────────────────────────────────────────────
-            y = AddSectionHeader(scroll, "⚡  Rendimiento", y + 8);
+            y = AddSectionHeader(scroll, UiText.Get("Rendimiento", "Performance"), y + 16);
 
             AddFieldLabel(scroll, "Simultáneas (al reiniciar):", 0, y + 7);
             var concurrentCombo = MakeCombo(scroll,
@@ -317,7 +317,7 @@ namespace OrbixaDownloader.Forms
             y += 50;
 
             // ── Actualizaciones ───────────────────────────────────────────────
-            y = AddSectionHeader(scroll, "🔄  Actualizaciones", y + 8);
+            y = AddSectionHeader(scroll, UiText.Get("Actualizaciones", "Updates"), y + 16);
 
             var autoUpdate = AddToggle(scroll,
                 "Verificar actualizaciones al iniciar", _settings.CheckUpdatesOnStartup, y);
@@ -370,6 +370,47 @@ namespace OrbixaDownloader.Forms
             // FIX: Spacer final para que el último botón no quede pegado al borde
             var spacer = new Panel { Left = 0, Top = y, Width = 1, Height = 12, BackColor = Color.Transparent };
             scroll.Controls.Add(spacer);
+
+            foreach (Control control in scroll.Controls)
+                control.Left += 28;
+
+            var normalPositions = scroll.Controls
+                .Cast<Control>()
+                .Where(control => control.Top >= postAppearanceTop)
+                .ToDictionary(control => control, control => control.Top);
+
+            void ApplyAppearanceLayout(bool isCustom)
+            {
+                customThemePanel.Visible = isCustom;
+                int languageTop = isCustom ? customThemePanel.Bottom + 16 : 92;
+                languageCombo.Top = languageTop;
+                languageLabel.Top = languageTop + 7;
+                int offset = isCustom ? CustomAppearanceExtraHeight : 0;
+                foreach (var position in normalPositions)
+                    position.Key.Top = position.Value + offset;
+            }
+
+            themeCombo.SelectedIndexChanged += (_, _) =>
+            {
+                var selectablePresets = Enum.GetValues<ThemePreset>().Where(preset => preset is not ThemePreset.SystemHighContrast and not ThemePreset.Personalizado).ToArray();
+                var selected = themeCombo.SelectedIndex < selectablePresets.Length
+                    ? selectablePresets[themeCombo.SelectedIndex]
+                    : themeCombo.SelectedIndex == selectablePresets.Length ? ThemePreset.SystemHighContrast : ThemePreset.Personalizado;
+                if (!DrawHelper.SetTheme(selected, _settings.CustomTheme))
+                {
+                    MessageBox.Show(this, UiText.Get("La combinación de colores no tiene contraste suficiente.", "This color combination does not have sufficient contrast."),
+                        UiText.Get("Tema no válido", "Invalid theme"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    themeCombo.SelectedItem = ThemeName(_settings.Theme);
+                    return;
+                }
+                _settings.Theme = selected;
+                _settings.Save();
+                ApplyAppearanceLayout(selected == ThemePreset.Personalizado);
+                DrawHelper.ApplyTheme(this);
+                BackColor = DrawHelper.Canvas;
+            };
+
+            ApplyAppearanceLayout(_settings.Theme == ThemePreset.Personalizado);
 
             // FIX: Orden correcto — scroll va antes del titleBar para que la barra
             // quede siempre encima del contenido al hacer scroll
@@ -459,14 +500,15 @@ namespace OrbixaDownloader.Forms
             };
             cb.Items.AddRange(items);
             cb.SelectedItem = items.Contains(selected) ? selected : items[0];
+            DrawHelper.StyleComboBox(cb);
             parent.Controls.Add(cb);
             return cb;
         }
 
-        private ComboBox MakeCustomCombo(Panel parent, string label, CuratedColor selected, int left, int top)
+        private ComboBox MakeCustomCombo(Panel parent, string label, CuratedColor selected, int left, int top, int width)
         {
             AddFieldLabel(parent, label, left, top);
-            return MakeCombo(parent, Enum.GetValues<CuratedColor>().Select(CuratedColorName).ToArray(), CuratedColorName(selected), left, top + 17, 150);
+            return MakeCombo(parent, Enum.GetValues<CuratedColor>().Select(CuratedColorName).ToArray(), CuratedColorName(selected), left, top + 20, width);
         }
 
         private static CustomThemeSettings ReadCustomTheme(ComboBox[] combos)

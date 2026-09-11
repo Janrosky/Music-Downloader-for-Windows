@@ -24,10 +24,10 @@ public class DownloadCard : Panel
         BackColor = MainForm.BgCard;
         Font = MainForm.GetFont(9, FontStyle.Regular);
         AccessibleName = UiText.Get("Descarga", "Download");
-        _cancel.Text = UiText.Get("[x] Cancelar", "[x] Cancel");
-        _retry.Text = UiText.Get("[>] Reintentar", "[>] Retry");
-        _details.Text = UiText.Get("[!] Ver error", "[!] View error");
-        _folder.Text = UiText.Get("[+] Abrir carpeta", "[+] Open folder");
+        _cancel.Text = UiText.Get("Cancelar", "Cancel");
+        _retry.Text = UiText.Get("Reintentar", "Retry");
+        _details.Text = UiText.Get("Ver detalles", "View details");
+        _folder.Text = UiText.Get("Abrir carpeta", "Open folder");
         _cancel.AccessibleName = UiText.Get("Cancelar descarga", "Cancel download");
         _retry.AccessibleName = UiText.Get("Reintentar descarga", "Retry download");
         _details.AccessibleName = UiText.Get("Ver detalles del error", "View error details");
@@ -43,7 +43,13 @@ public class DownloadCard : Panel
         {
             button.BackColor = MainForm.Surface;
             button.ForeColor = DrawHelper.Text;
-            button.FlatStyle = FlatStyle.Standard;
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = 1;
+            button.FlatAppearance.BorderColor = DrawHelper.Border;
+            button.Height = 28;
+            button.Padding = new Padding(8, 0, 8, 0);
+            button.Margin = new Padding(0, 0, 8, 0);
+            DrawHelper.MakeRounded(button, 8);
             actions.Controls.Add(button);
         }
         layout.Controls.Add(actions, 0, 3); Controls.Add(layout);

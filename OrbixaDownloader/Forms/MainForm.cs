@@ -36,6 +36,8 @@ namespace OrbixaDownloader.Forms
         private Label _feedback = null!;
         private Label _destination = null!;
         private Label _emptyQueue = null!;
+        private readonly List<Button> _navButtons = new();
+        private Button? _activeNavButton;
         private string _audioChoice = "MP3", _videoChoice = "MP4";
         private bool _changingDefaults;
         private readonly System.Windows.Forms.Timer _statsTimer = new() { Interval = 250 };
@@ -65,6 +67,7 @@ namespace OrbixaDownloader.Forms
         // ── Build UI ──────────────────────────────────────────────────────────
         private void BuildUI()
         {
+            const int contentInset = 32;
             // ── Sidebar ───────────────────────────────────────────────────────
             _sidebar = new Panel
             {
@@ -88,42 +91,32 @@ namespace OrbixaDownloader.Forms
             };
             _sidebar.Controls.Add(logoLabel);
 
-            string[] navItems = { "⬇  Descargar", "📋  Cola", "⚙  Ajustes" };
-            int navY = 110;
-            foreach (var item in navItems)
+            var navCaption = new Label
             {
-                var btn = new Button
-                {
-                    Text = item,
-                    Font = GetFont(10, FontStyle.Regular),
-                    ForeColor = item.StartsWith("⬇") ? White : Muted,
-                    BackColor = item.StartsWith("⬇") ? DrawHelper.SurfaceStrong : Color.Transparent,
-                    AutoSize = false,
-                    Width = 180,
-                    Height = 38,
-                    Left = 20,
-                    Top = navY,
-                    TextAlign = ContentAlignment.MiddleLeft,
-                    AccessibleName = item,
-                    Padding = new Padding(16, 0, 0, 0),
-                    Cursor = Cursors.Hand
-                };
+                Text = "NAVEGACIÓN",
+                Font = GetFont(8, FontStyle.Bold),
+                ForeColor = Muted,
+                AutoSize = true,
+                Left = 28,
+                Top = 104
+            };
+            _sidebar.Controls.Add(navCaption);
 
-                // Navegación entre secciones
-                if (item.StartsWith("⚙"))
-                    btn.Click += (_, _) =>
-                    {
-                        using var sf = new SettingsForm(_settings);
-                        sf.ShowDialog(this);
-                        ApplyDefaults();
-                    };
-
-                if (item.StartsWith("⬇")) btn.Click += (_, _) => _urlBox.Focus();
-                if (item.StartsWith("📋")) btn.Click += (_, _) => _queuePanel.Focus();
-                DrawHelper.AddRoundedAppearance(btn, 8);
-                _sidebar.Controls.Add(btn);
-                navY += 48;
-            }
+            var downloadNav = CreateNavigationButton("↓  Descargar", 128);
+            downloadNav.Click += (_, _) => { SetActiveNavigation(downloadNav); _urlBox.Focus(); };
+            var queueNav = CreateNavigationButton("☷  Cola", 178);
+            queueNav.Click += (_, _) => { SetActiveNavigation(queueNav); _queuePanel.Focus(); };
+            var settingsNav = CreateNavigationButton("⚙  Ajustes", 228);
+            settingsNav.Click += (_, _) =>
+            {
+                SetActiveNavigation(settingsNav);
+                using var sf = new SettingsForm(_settings);
+                sf.ShowDialog(this);
+                ApplyDefaults();
+                SetActiveNavigation(downloadNav);
+            };
+            _sidebar.Controls.AddRange(new Control[] { downloadNav, queueNav, settingsNav });
+            SetActiveNavigation(downloadNav);
 
             var verLabel = new Label
             {
@@ -166,11 +159,17 @@ namespace OrbixaDownloader.Forms
                 maxBtn.Left = _topBar.Width - 80;
                 minBtn.Left = _topBar.Width - 120;
             };
+            void LayoutWindowButtons()
+            {
+                closeBtn.Left = _topBar.Width - 40;
+                maxBtn.Left = _topBar.Width - 80;
+                minBtn.Left = _topBar.Width - 120;
+            }
 
             // Botón abrir reproductor
             var playerBtn = new Button
             {
-                Text = "♪  Reproductor",
+                Text = "Reproductor",
                 Font = GetFont(9, FontStyle.Bold),
                 ForeColor = White,
                 BackColor = DrawHelper.SurfaceStrong,
@@ -178,7 +177,6 @@ namespace OrbixaDownloader.Forms
                 Width = 130,
                 Height = 30,
                 Top = 11,
-                Left = 350,
                 Cursor = Cursors.Hand
             };
             playerBtn.FlatAppearance.BorderSize = 0;
@@ -198,11 +196,21 @@ namespace OrbixaDownloader.Forms
                 Text = "0 descargas",
                 Font = GetFont(9, FontStyle.Regular),
                 ForeColor = Muted,
-                AutoSize = true,
-                Top = 18,
-                Left = 16
+                AutoSize = false,
+                AutoEllipsis = true,
+                Height = 52,
+                Top = 0,
+                Left = 20,
+                TextAlign = ContentAlignment.MiddleLeft
             };
             _topBar.Controls.Add(_statsLabel);
+            void LayoutTopBar()
+            {
+                playerBtn.Left = Math.Max(170, _topBar.Width - 280);
+                _statsLabel.Width = Math.Max(120, playerBtn.Left - 36);
+            }
+            _topBar.Resize += (_, _) => LayoutTopBar();
+            LayoutTopBar();
 
             // ── Content area ──────────────────────────────────────────────────
             _contentArea = new Panel
@@ -212,22 +220,34 @@ namespace OrbixaDownloader.Forms
                 Padding = new Padding(32, 28, 32, 24)
             };
 
+            var downloadCard = new Panel
+            {
+                Left = contentInset,
+                Top = 20,
+                Width = Math.Max(320, _contentArea.Width - contentInset * 2),
+                Height = 276,
+                BackColor = BgCard,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
+            };
+            downloadCard.Paint += (_, e) => DrawHelper.PaintGlass(e.Graphics, downloadCard.ClientRectangle, 14);
+
             var addTitle = MakeLabel("Nueva descarga", 14, FontStyle.Bold, White);
-            addTitle.Top = 0; addTitle.Left = 0;
+            addTitle.Top = 20; addTitle.Left = 20;
 
             var addSub = MakeLabel("Pegá un enlace de YouTube o SoundCloud (un elemento)", 10, FontStyle.Regular, Muted);
-            addSub.Top = 28; addSub.Left = 0;
+            addSub.Top = 46; addSub.Left = 20;
 
             // URL row
             var urlPanel = new Panel
             {
-                Left = 0,
-                Top = 56,
-                Width = _contentArea.Width - 64,
+                Left = 20,
+                Top = 76,
+                Width = downloadCard.Width - 40,
                 Height = 48,
                 BackColor = Surface2,
                 Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
             };
+            urlPanel.Tag = DrawHelper.PreserveSurfaceTag;
             DrawHelper.MakeRounded(urlPanel, 12);
 
             _urlBox = new TextBox
@@ -246,7 +266,7 @@ namespace OrbixaDownloader.Forms
             _urlBox.AccessibleName = "Enlace de descarga";
             _urlBox.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; OnDownloadClicked(_downloadBtn, EventArgs.Empty); } };
 
-            _pasteBtn = MakeIconButton("⎘", urlPanel.Width - 44, 6);
+            _pasteBtn = MakeIconButton("Pegar", urlPanel.Width - 70, 6);
             _pasteBtn.Anchor = AnchorStyles.Right | AnchorStyles.Top;
             _pasteBtn.Click += (_, _) =>
             {
@@ -259,19 +279,19 @@ namespace OrbixaDownloader.Forms
             urlPanel.Controls.AddRange(new Control[] { _urlBox, _pasteBtn });
 
             // Options row
-            var optPanel = new Panel { Left = 0, Top = 116, Width = 600, Height = 44 };
+            var optPanel = new Panel { Left = 20, Top = 136, Width = downloadCard.Width - 40, Height = 36, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, BackColor = Color.Transparent };
 
             var typeLabel = MakeLabel("Tipo:", 9, FontStyle.Regular, Muted);
             typeLabel.Left = 0; typeLabel.Top = 12;
 
-            _typeCombo = MakeCombo(new[] { "Solo audio", "Video + Audio" }, 52, 0);
+            _typeCombo = MakeCombo(new[] { "Solo audio", "Video + Audio" }, 64, 0);
             _typeCombo.SelectedIndex = 0;
             _typeCombo.SelectedIndexChanged += (_, _) => UpdateFormatCombo();
 
             var fmtLabel = MakeLabel("Formato:", 9, FontStyle.Regular, Muted);
-            fmtLabel.Left = 200; fmtLabel.Top = 12;
+            fmtLabel.Left = 230; fmtLabel.Top = 12;
 
-            _formatCombo = MakeCombo(new[] { "MP3", "M4A", "FLAC", "WAV" }, 252, 0);
+            _formatCombo = MakeCombo(new[] { "MP3", "M4A", "FLAC", "WAV" }, 302, 0);
             _formatCombo.SelectedIndex = 0;
 
             optPanel.Controls.AddRange(new Control[] { typeLabel, _typeCombo, fmtLabel, _formatCombo });
@@ -291,8 +311,8 @@ namespace OrbixaDownloader.Forms
                 ForeColor = White,
                 BackColor = Red,
                 FlatStyle = FlatStyle.Flat,
-                Left = 0,
-                Top = 176,
+                Left = 20,
+                Top = 184,
                 Width = 200,
                 Height = 46,
                 Cursor = Cursors.Hand
@@ -301,28 +321,27 @@ namespace OrbixaDownloader.Forms
             DrawHelper.MakeRounded(_downloadBtn, 12);
             _downloadBtn.Click += OnDownloadClicked;
 
-            _feedback = new Label { Left = 0, Top = 225, Height = 42, ForeColor = Muted, AutoEllipsis = true, Text = "Usá un enlace completo que empiece con https://", AccessibleName = "Ayuda y resultado de validación" };
-            _destination = new Label { Left = 215, Top = 176, Height = 44, ForeColor = Muted, AutoEllipsis = true, AccessibleName = "Carpeta de destino" };
-            _contentArea.Controls.Add(_feedback);
-            _contentArea.Controls.Add(_destination);
+            _feedback = new Label { Left = 20, Top = 236, Height = 24, ForeColor = Muted, AutoEllipsis = true, Text = "Usá un enlace completo que empiece con https://", AccessibleName = "Ayuda y resultado de validación" };
+            _destination = new Label { Left = 236, Top = 186, Height = 38, ForeColor = Muted, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, AccessibleName = "Carpeta de destino" };
+            downloadCard.Controls.AddRange(new Control[] { addTitle, addSub, urlPanel, optPanel, _downloadBtn, _feedback, _destination });
 
             // Divider
             var divider = new Panel
             {
-                Left = 0,
-                Top = 272,
+                Left = contentInset,
+                Top = 316,
                 Height = 1,
                 BackColor = DrawHelper.Border,
                 Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
             };
 
             _queueTitle = MakeLabel("Cola de descargas", 12, FontStyle.Bold, White);
-            _queueTitle.Top = 280; _queueTitle.Left = 0;
+            _queueTitle.Top = 326; _queueTitle.Left = contentInset;
 
             _queuePanel = new FlowLayoutPanel
             {
-                Left = 0,
-                Top = 310,
+                Left = contentInset,
+                Top = 356,
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
                 AutoScroll = true,
@@ -337,26 +356,31 @@ namespace OrbixaDownloader.Forms
 
             _contentArea.Controls.AddRange(new Control[]
             {
-                addTitle, addSub, urlPanel, optPanel,
-                _downloadBtn, divider, _queueTitle, _queuePanel
+                downloadCard, divider, _queueTitle, _queuePanel
             });
 
-            _contentArea.Resize += (_, _) =>
+            void LayoutContent()
             {
-                urlPanel.Width = _contentArea.Width - 64;
-                _urlBox.Width = urlPanel.Width - 60;
-                _pasteBtn.Left = urlPanel.Width - 44;
-                divider.Width = _contentArea.Width - 64;
-                _queuePanel.Width = _contentArea.Width - 64;
-                _queuePanel.Height = Math.Max(100, _contentArea.Height - 330);
-                _feedback.Width = _contentArea.Width - 64;
-                _destination.Width = Math.Max(100, _contentArea.Width - 280);
+                downloadCard.Width = _contentArea.Width - contentInset * 2;
+                urlPanel.Width = downloadCard.Width - 40;
+                _urlBox.Width = urlPanel.Width - 86;
+                _pasteBtn.Left = urlPanel.Width - 70;
+                optPanel.Width = downloadCard.Width - 40;
+                divider.Width = _contentArea.Width - contentInset * 2;
+                _queuePanel.Width = _contentArea.Width - contentInset * 2;
+                _queuePanel.Height = Math.Max(100, _contentArea.Height - 376);
+                _feedback.Width = downloadCard.Width - 40;
+                _destination.Width = Math.Max(100, downloadCard.Width - 256);
                 foreach (Control card in _queuePanel.Controls) card.Width = Math.Max(200, _queuePanel.ClientSize.Width - 24);
-            };
+            }
+            _contentArea.Resize += (_, _) => LayoutContent();
 
             Controls.Add(_contentArea);
             Controls.Add(_topBar);
             Controls.Add(_sidebar);
+            LayoutWindowButtons();
+            LayoutTopBar();
+            LayoutContent();
         }
 
         // ── Download logic ────────────────────────────────────────────────────
@@ -456,6 +480,7 @@ namespace OrbixaDownloader.Forms
             _changingDefaults = false;
             _destination.Text = UiText.Get("Destino: ", "Destination: ") + _settings.DefaultOutputFolder;
             _toolTip.SetToolTip(_destination, _settings.DefaultOutputFolder);
+            if (_activeNavButton != null) SetActiveNavigation(_activeNavButton);
         }
 
         private void UpdateFormatCombo()
@@ -536,6 +561,50 @@ namespace OrbixaDownloader.Forms
                 AutoSize = true
             };
 
+        private Button CreateNavigationButton(string text, int top)
+        {
+            var button = new Button
+            {
+                Text = text,
+                Font = GetFont(10, FontStyle.Regular),
+                ForeColor = Muted,
+                BackColor = Color.Transparent,
+                AutoSize = false,
+                Width = 180,
+                Height = 42,
+                Left = 20,
+                Top = top,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AccessibleName = text,
+                Padding = new Padding(18, 0, 0, 0),
+                Cursor = Cursors.Hand,
+                FlatStyle = FlatStyle.Flat
+            };
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = DrawHelper.SurfaceStrong;
+            button.Paint += (_, e) =>
+            {
+                if (!ReferenceEquals(button, _activeNavButton)) return;
+                using var brush = new SolidBrush(DrawHelper.Accent);
+                e.Graphics.FillRectangle(brush, 0, 10, 3, button.Height - 20);
+            };
+            DrawHelper.MakeRounded(button, 10);
+            _navButtons.Add(button);
+            return button;
+        }
+
+        private void SetActiveNavigation(Button button)
+        {
+            _activeNavButton = button;
+            foreach (var navButton in _navButtons)
+            {
+                bool isActive = ReferenceEquals(navButton, button);
+                navButton.BackColor = isActive ? DrawHelper.SurfaceStrong : Color.Transparent;
+                navButton.ForeColor = isActive ? White : Muted;
+                navButton.Invalidate();
+            }
+        }
+
         private ComboBox MakeCombo(string[] items, int left, int top)
         {
             var cb = new ComboBox
@@ -551,6 +620,7 @@ namespace OrbixaDownloader.Forms
                 Height = 32
             };
             cb.Items.AddRange(items);
+            DrawHelper.StyleComboBox(cb);
             return cb;
         }
 
@@ -558,13 +628,13 @@ namespace OrbixaDownloader.Forms
             => new Button
             {
                 Text = icon,
-                Font = GetFont(12, FontStyle.Regular),
+                Font = GetFont(9, FontStyle.Bold),
                 ForeColor = Muted,
                 BackColor = Color.Transparent,
                 FlatStyle = FlatStyle.Flat,
                 Left = left,
                 Top = top,
-                Width = 36,
+                Width = 62,
                 Height = 36,
                 Cursor = Cursors.Hand
             };

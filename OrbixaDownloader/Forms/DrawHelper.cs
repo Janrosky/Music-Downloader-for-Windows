@@ -9,6 +9,7 @@ namespace OrbixaDownloader.Forms
     /// </summary>
     public static class DrawHelper
     {
+        public const string PreserveSurfaceTag = "orbixa-preserve-surface";
         private static ThemePreset _preset = ThemePreset.OrbixaMineral;
         private static CustomThemeSettings _customTheme = new();
         private static readonly ConditionalWeakTable<Button, ButtonStyleState> ButtonStates = new();
@@ -70,7 +71,8 @@ namespace OrbixaDownloader.Forms
                     MakeRounded(button, 12);
                 }
                 else if (control is Label or CheckBox) control.ForeColor = Text;
-                else if (control is Panel && control is not FlowLayoutPanel && control is not TableLayoutPanel)
+                else if (control is Panel && control is not FlowLayoutPanel && control is not TableLayoutPanel
+                    && !Equals(control.Tag, PreserveSurfaceTag))
                 {
                     control.BackColor = Glass;
                 }
@@ -349,6 +351,22 @@ namespace OrbixaDownloader.Forms
             float x = bounds.X + (bounds.Width - size.Width) / 2f;
             float y = bounds.Y + (bounds.Height - size.Height) / 2f;
             g.DrawString(text, font, brush, x, y);
+        }
+
+        public static void StyleComboBox(ComboBox combo)
+        {
+            combo.DrawMode = DrawMode.OwnerDrawFixed;
+            combo.ItemHeight = 26;
+            combo.DrawItem += (_, e) =>
+            {
+                if (e.Index < 0) return;
+                bool selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+                Color background = selected ? SurfaceStrong : Field;
+                using var brush = new SolidBrush(background);
+                e.Graphics.FillRectangle(brush, e.Bounds);
+                TextRenderer.DrawText(e.Graphics, combo.GetItemText(combo.Items[e.Index]), combo.Font,
+                    Rectangle.Inflate(e.Bounds, -8, 0), Text, TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+            };
         }
 
         public static string Truncate(Graphics g, string text, Font font, float maxWidth)
